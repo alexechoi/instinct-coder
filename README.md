@@ -1,6 +1,6 @@
 # Instinct Coder
 
-![Instinct Coder cover showing a terminal connected to a chat bubble](docs/cover.webp)
+![Instinct Coder. Use your Instinct for inference.](docs/cover.webp)
 
 [![Platforms](docs/badges/platforms.svg)](#get-started)
 [![OpenCode](docs/badges/opencode.svg)](https://github.com/anomalyco/opencode/releases/tag/v1.19.6)
@@ -31,7 +31,15 @@ On your phone, open **WhatsApp → Linked devices → Link a device**, then scan
 
 ## Start coding
 
-In any project folder, run `~/.local/bin/instinct-coder`. It starts the bridge and opens OpenCode with Instinct selected. OpenCode asks before edits or shell commands. Quit OpenCode to stop the bridge.
+### OpenCode
+
+From your project folder, launch OpenCode with Instinct selected.
+
+```sh
+~/.local/bin/instinct-coder
+```
+
+The launcher starts the WhatsApp bridge. OpenCode asks before edits or shell commands. Quit OpenCode to stop the bridge.
 
 ### Codex CLI and Claude Code
 
@@ -42,7 +50,7 @@ Install the client you want to use, then run one of these commands from your pro
 ~/.local/bin/instinct-coder claude
 ```
 
-Both use the same linked WhatsApp account for text and local tool calls. Claude Code support is experimental and starts with the file and shell tools that fit WhatsApp's message limit. Short sessions work best.
+Both use the same linked WhatsApp account for text and local tool calls. Claude Code support is experimental. For oversized project instruction reminders, Claude can read the linked files in sections. Short sessions work best.
 
 The [bill splitter](examples/bill-splitter/index.html) was built in a live OpenCode session using Instinct tool calls over WhatsApp.
 

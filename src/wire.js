@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BridgeError, model } from './protocol.js';
+import { BridgeError, model, prepareTurn } from './protocol.js';
 
 export const identifier = (prefix) => `${prefix}_${randomUUID().replaceAll('-', '')}`;
 export const timestamp = () => Math.floor(Date.now() / 1000);
@@ -51,7 +51,7 @@ export function sse(response, value, event) {
 }
 
 export const chatCompletions = {
-  request: (body) => body,
+  prepareTurn,
   open(response, body) {
     const metadata = { id: identifier('chatcmpl'), model, created: timestamp() };
     if (body.stream !== true) {

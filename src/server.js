@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
-import { BridgeError, model, prepareTurn } from './protocol.js';
+import { BridgeError, model } from './protocol.js';
 import { whatsappTransport } from './wacli.js';
 
 import { anthropicMessages } from './anthropic.js';
@@ -95,10 +95,10 @@ export function createGateway({ key, maxChars, timeoutMs, complete }) {
         sendJSON(response, 200, anthropicMessages.count(body));
         return;
       }
-      const turn = prepareTurn(adapter.request(body), maxChars);
+      const turn = adapter.prepareTurn(body, maxChars);
       if (queued >= 4) throw new BridgeError(429, 'bridge_busy', 'The WhatsApp queue is full. Try again when it has drained.');
       const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), disconnect.signal]);
-      exchange = adapter.open(response, body);
+      exchange = adapter.open(response, body, turn);
       if (body.stream === true) heartbeat = setInterval(() => response.write(': waiting for WhatsApp\n\n'), 10_000);
 
       const result = await enqueue(turn, signal);

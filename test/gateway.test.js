@@ -166,3 +166,40 @@ test('retries a wacli lock before send dispatch and reports streamed provider fa
   assert.equal(events.at(-1).type, 'response.failed');
   assert.equal(events.at(-1).response.error.code, 'invalid_whatsapp_reply');
 });
+
+test('oversized Claude Code instruction reminders become file references without dropping the user message', async (t) => {
+  const { request } = await testGateway(t);
+  const reminder = [
+    '<system-reminder>',
+    'Codebase and user instructions are shown below. Be sure to adhere to these instructions.',
+    '',
+    'Contents of /project with spaces/CLAUDE.md (project instructions, checked into the codebase):',
+    'oversized instruction text\n'.repeat(200),
+    '</system-reminder>',
+  ].join('\n');
+  const body = { messages: [user([
+    { type: 'text', text: reminder },
+    { type: 'text', text: 'INSTRUCTION_BUDGET_FIXTURE. Keep this original user message.' },
+  ])] };
+  const read = { name: 'Read', input_schema: { type: 'object' } };
+  const answer = await request('messages', { ...body, tools: [read] });
+  assert.equal(answer.status, 200);
+  assert.equal((await answer.json()).content[0].text, 'Hello through the bridge.');
+
+  const readAnswer = await request('messages', { tools: [read], messages: [user([
+    { type: 'text', text: reminder },
+    { type: 'text', text: 'READ_INSTRUCTION_BUDGET_FIXTURE. Keep this original user message.' },
+  ])] });
+  assert.equal(readAnswer.status, 200);
+  assert.deepEqual((await readAnswer.json()).content[0].input, {
+    file_path: '/project with spaces/CLAUDE.md', limit: 48,
+  });
+
+  const withoutRead = await request('messages', body);
+  assert.equal(withoutRead.status, 400);
+  assert.match((await withoutRead.json()).error.message, /WhatsApp prompt has/);
+
+  const oversizedUser = await request('messages', { messages: [user('ordinary user text '.repeat(200))], tools: [read] });
+  assert.equal(oversizedUser.status, 400);
+  assert.match((await oversizedUser.json()).error.message, /WhatsApp prompt has/);
+});

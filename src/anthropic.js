@@ -1,7 +1,25 @@
-import { model } from './protocol.js';
+import { BridgeError, model, prepareTurn } from './protocol.js';
 import { conversation, functionTool, identifier, invalid, openStream, sendJSON, sse, textBlocks, toolCall } from './wire.js';
 
-function messages(input) {
+const instructionReadLines = 48;
+
+function instructionReferences(text, deferred) {
+  if (!deferred || text.length <= deferred.maxChars / 4 ||
+      !text.startsWith('<system-reminder>\nCodebase and user instructions are shown below.') ||
+      !text.trimEnd().endsWith('</system-reminder>')) return text;
+
+  const paths = [...text.matchAll(/^Contents of (\/[\S ]+?|[A-Za-z]:[\\/][\S ]+?) \([^\r\n]+\):$/gm)]
+    .map(([, path]) => path);
+  if (!paths.length) return text;
+  for (const path of paths) deferred.files.add(path);
+  return [
+    'Project and user instruction files supplied by Claude Code:',
+    ...new Set(paths),
+    `Before doing project work, consult the applicable files using the local Read tool in small sections, up to ${instructionReadLines} lines per call. Follow those instructions.`,
+  ].join('\n');
+}
+
+function messages(input, deferred) {
   if (input?.role === 'system') return [{ role: 'system', content: textBlocks(input.content, ['text']) }];
   if (!input || !['user', 'assistant'].includes(input.role)) invalid('Expected a user or assistant message.');
   if (typeof input.content === 'string') return [{ role: input.role, content: input.content }];
@@ -10,10 +28,12 @@ function messages(input) {
   let current = { role: input.role };
   for (const block of input.content) {
     switch (block?.type) {
-      case 'text':
+      case 'text': {
         if (typeof block.text !== 'string') invalid('Expected a text block.');
-        current.content = current.content === undefined ? block.text : `${current.content}\n${block.text}`;
+        const text = input.role === 'user' ? instructionReferences(block.text, deferred) : block.text;
+        current.content = current.content === undefined ? text : `${current.content}\n${text}`;
         break;
+      }
       case 'tool_use': {
         if (input.role !== 'assistant') invalid('Tool calls belong to assistant messages.');
         current.tool_calls ??= [];
@@ -38,12 +58,12 @@ function messages(input) {
   return result;
 }
 
-function prepare(body) {
+function prepare(body, deferred) {
   const request = conversation(body);
   if (!Array.isArray(body.messages)) invalid('messages must be an array.');
   if (body.output_config?.format || body.output_format) invalid('Only plain text responses are supported.');
   if (body.system) request.messages.push({ role: 'system', content: textBlocks(body.system, ['text']) });
-  request.messages.push(...body.messages.flatMap(messages));
+  request.messages.push(...body.messages.flatMap((message) => messages(message, deferred)));
   if (body.tools !== undefined && !Array.isArray(body.tools)) invalid('tools must be an array.');
   request.tools = (body.tools ?? []).filter((tool) => tool?.input_schema).map((tool) =>
     functionTool(tool.name, tool.description, tool.input_schema));
@@ -73,8 +93,21 @@ function tokens(value) {
 }
 
 export const anthropicMessages = {
-  request: prepare,
-  open(response, body) {
+  prepareTurn(body, maxChars) {
+    const request = prepare(body);
+    try {
+      return prepareTurn(request, maxChars);
+    } catch (error) {
+      const choice = request.tool_choice;
+      const canRead = choice !== 'none' && (typeof choice !== 'object' || choice.function.name === 'Read')
+        && request.tools.some((tool) => tool.function.name === 'Read');
+      if (!(error instanceof BridgeError) || error.code !== 'prompt_too_large' || !canRead) throw error;
+      const deferred = { maxChars, files: new Set() };
+      const turn = prepareTurn(prepare(body, deferred), maxChars);
+      return { ...turn, instructionFiles: deferred.files };
+    }
+  },
+  open(response, body, turn) {
     const initial = {
       id: identifier('msg'), type: 'message', role: 'assistant', model,
       content: [], stop_reason: null, stop_sequence: null,
@@ -87,9 +120,13 @@ export const anthropicMessages = {
       emit('message_start', { message: initial });
     }
     const complete = ({ content, tool_calls }) => {
-      const blocks = tool_calls ? tool_calls.map((call) => ({
-        type: 'tool_use', id: call.id, name: call.function.name, input: JSON.parse(call.function.arguments),
-      })) : [{ type: 'text', text: content }];
+      const blocks = tool_calls ? tool_calls.map((call) => {
+        const { name } = call.function;
+        const input = JSON.parse(call.function.arguments);
+        if (name === 'Read' && turn.instructionFiles?.has(input.file_path) &&
+            (input.limit === undefined || input.limit > instructionReadLines)) input.limit = instructionReadLines;
+        return { type: 'tool_use', id: call.id, name, input };
+      }) : [{ type: 'text', text: content }];
       const stop_reason = tool_calls ? 'tool_use' : 'end_turn';
       if (!streaming) {
         return sendJSON(response, 200, { ...initial, content: blocks, stop_reason });
