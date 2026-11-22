@@ -23,11 +23,13 @@ This installs Instinct Coder, OpenCode, and the WhatsApp connector for your user
 
 **2. Link WhatsApp**
 
+We recommend linking a dedicated WhatsApp account and keeping your primary account separate. Before pairing, confirm the dedicated account can exchange messages with **@textinstinct**.
+
 ```sh
 ~/.local/bin/instinct-coder setup
 ```
 
-On your phone, open **WhatsApp → Linked devices → Link a device**, then scan the QR code in your terminal. Instinct Coder is already set to use **@textinstinct**.
+On the phone signed in to that account, open **WhatsApp → Linked devices → Link a device**, then scan the QR code in your terminal.
 
 ## Start coding
 
@@ -53,6 +55,10 @@ Install the client you want to use, then run one of these commands from your pro
 Both use the same linked WhatsApp account for text and local tool calls. Claude Code support is experimental. For oversized project instruction reminders, Claude can read the linked files in sections. Short sessions work best.
 
 The [bill splitter](examples/bill-splitter/index.html) was built in a live OpenCode session using Instinct tool calls over WhatsApp.
+
+## Disclaimer
+
+Instinct Coder is provided as is, without warranties. To the extent permitted by applicable law, its contributors disclaim liability for losses, damages, and account restrictions arising from its use. [Apache 2.0 license](LICENSE)
 
 Instinct receives your prompts, shared file contents, and tool results. Use an account authorized for automation and share files you have permission to send. [Instinct terms](https://instinct.com/terms) · [WhatsApp terms](https://www.whatsapp.com/legal/terms-of-service)
 
