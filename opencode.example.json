@@ -24,6 +24,8 @@
   },
   "permission": {
     "*": "ask",
+    "edit": "ask",
+    "bash": "ask",
     "read": "allow",
     "glob": "allow",
     "grep": "allow",

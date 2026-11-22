@@ -2,10 +2,10 @@
 
 ![Instinct Coder cover showing a terminal connected to a chat bubble](docs/cover.webp)
 
-[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-273c35?style=flat-square)](#get-started)
-[![OpenCode](https://img.shields.io/badge/OpenCode-1.19.6-237655?style=flat-square)](https://github.com/anomalyco/opencode/releases/tag/v1.19.6)
-[![Live test](https://img.shields.io/badge/WhatsApp-live%20tested-237655?style=flat-square)](examples/bill-splitter/index.html)
-[![License](https://img.shields.io/badge/license-Apache%202.0-273c35?style=flat-square)](LICENSE)
+[![Platforms](docs/badges/platforms.svg)](#get-started)
+[![OpenCode](docs/badges/opencode.svg)](https://github.com/anomalyco/opencode/releases/tag/v1.19.6)
+[![Live test](docs/badges/whatsapp.svg)](examples/bill-splitter/index.html)
+[![License](docs/badges/license.svg)](LICENSE)
 
 **Use Instinct as the model in OpenCode through your WhatsApp account.**
 

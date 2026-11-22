@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="23" role="img" aria-label="OpenCode: 1.19.6">
+  <title>OpenCode: 1.19.6</title>
+  <clipPath id="frame"><rect width="120" height="23" rx="4"/></clipPath>
+  <g clip-path="url(#frame)">
+    <path fill="#182821" d="M0 0h69v23H0z"/>
+    <path fill="#1a6949" d="M69 0h51v23H69z"/>
+  </g>
+  <g fill="#f1fff8" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" text-anchor="middle">
+    <text x="34.5" y="15">OpenCode</text>
+    <text x="94.5" y="15">1.19.6</text>
+  </g>
+</svg>
