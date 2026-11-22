@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "instinct/instinct-whatsapp",
+  "small_model": "instinct/instinct-whatsapp",
+  "provider": {
+    "instinct": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Instinct via WhatsApp",
+      "env": ["INSTINCT_BRIDGE_KEY"],
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "timeout": false
+      },
+      "models": {
+        "instinct-whatsapp": {
+          "name": "Instinct via WhatsApp",
+          "attachment": false,
+          "tool_call": true,
+          "limit": { "context": 10000, "output": 2048 },
+          "modalities": { "input": ["text"], "output": ["text"] }
+        }
+      }
+    }
+  },
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "external_directory": "deny"
+  }
+}
