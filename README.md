@@ -26,6 +26,6 @@ Requires Node.js 22.9+, [OpenCode 1.x](https://opencode.ai/docs/), and [wacli 0.
 
 ## Test status
 
-Run `npm test` for simulated WhatsApp replies, tool calls, and timeouts. A live test with OpenCode 1.19.6 confirmed that an Instinct text reply made it back into OpenCode.
+Run `npm test` for simulated replies, tool calls, and timeouts. In a live test, OpenCode 1.19.6 built this [bill splitter](examples/bill-splitter/index.html) using a tool call from Instinct over WhatsApp.
 
 The bridge handles text and forwards OpenCode context, including file contents and tool results, to the selected chat. Use an account authorized for automation. [Instinct terms](https://instinct.com/terms) · [WhatsApp terms](https://www.whatsapp.com/legal/terms-of-service)

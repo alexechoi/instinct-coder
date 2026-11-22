@@ -1,0 +1,21 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tip Splitter</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef2f7;font:16px system-ui,sans-serif;color:#1c2430}
+form{width:min(92vw,360px);background:#fff;padding:24px;border-radius:16px;box-shadow:0 8px 28px rgba(0,0,0,.1)}
+h1{margin:0 0 16px;font-size:20px}label{display:block;margin:12px 0 4px;font-size:13px;font-weight:600;color:#4a5568}
+input{width:100%;padding:10px 12px;border:1px solid #cbd5e0;border-radius:8px;font-size:16px}input:focus{outline:2px solid #3b82f6;border-color:transparent}
+.out{margin-top:20px;padding:14px;background:#f1f5ff;border-radius:10px;text-align:center}.out span{display:block;font-size:13px;color:#4a5568}
+output{font-size:28px;font-weight:700;color:#1d4ed8}#err{margin-top:12px;color:#b91c1c;font-size:14px;min-height:18px}
+</style></head><body><form onsubmit="return false"><h1>Tip &amp; Bill Splitter</h1>
+<label for="bill">Bill amount</label><input id="bill" name="bill" type="number" step="0.01" value="100">
+<label for="tip">Tip percentage</label><input id="tip" name="tip" type="number" step="0.1" value="15">
+<label for="ppl">Number of people</label><input id="ppl" name="ppl" type="number" step="1" value="2">
+<div id="err" role="alert"></div>
+<div class="out"><span>Per person</span><output id="out" for="bill tip ppl">$57.50</output></div></form>
+<script>
+const $=i=>document.getElementById(i),f=new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"});
+function calc(){const b=parseFloat($("bill").value),t=parseFloat($("tip").value),p=parseFloat($("ppl").value);let e="";
+if(!isFinite(b)||b<0)e="Enter a bill amount of 0 or more.";else if(!isFinite(t)||t<0)e="Enter a tip percentage of 0 or more.";
+else if(!isFinite(p)||p<1||!Number.isInteger(p))e="Number of people must be a whole number of at least 1.";
+$("err").textContent=e;$("out").textContent=e?"--":f.format(b*(1+t/100)/p)}
+["bill","tip","ppl"].forEach(i=>$(i).addEventListener("input",calc));calc();
+</script></body></html>
