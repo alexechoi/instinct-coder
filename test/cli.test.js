@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 const path = (relative) => fileURLToPath(new URL(relative, import.meta.url));
 
-test('setup links WhatsApp once, and launch runs the gateway until OpenCode exits', async (t) => {
+async function testLauncher(t) {
   const state = await mkdtemp(join(tmpdir(), 'instinct-setup-'));
   t.after(() => rm(state, { recursive: true, force: true }));
   const env = {
@@ -21,7 +21,13 @@ test('setup links WhatsApp once, and launch runs the gateway until OpenCode exit
     OPENCODE_BIN: path('./fake-opencode'),
   };
   delete env.INSTINCT_WHATSAPP_CHAT;
+  delete env.OPENCODE_DB;
   const cli = (...args) => run(process.execPath, [path('../src/cli.js'), ...args], { env, timeout: 10_000 });
+  return { state, env, cli };
+}
+
+test('setup links WhatsApp once, and launch runs the gateway until OpenCode exits', async (t) => {
+  const { state, env, cli } = await testLauncher(t);
   await assert.rejects(cli('run', 'Hello'), /Finish setup first/);
   const first = await cli('setup');
   assert.match(first.stdout, /Scan the QR/);
@@ -43,4 +49,30 @@ test('setup links WhatsApp once, and launch runs the gateway until OpenCode exit
 
   const syncPid = Number(await readFile(join(state, 'whatsapp', 'sync.pid'), 'utf8'));
   assert.throws(() => process.kill(syncPid, 0), { code: 'ESRCH' });
+});
+
+test('OpenCode uses a separate database for an incompatible default and keeps using it', async (t) => {
+  const { state, env, cli } = await testLauncher(t);
+  await cli('setup');
+
+  const probeLog = join(state, 'probe.log');
+  env.FAKE_OPENCODE_PROBE_LOG = probeLog;
+  env.FAKE_OPENCODE_DB_ERROR = 'Database is locked';
+  assert.match((await cli('run', 'Hello')).stdout, /Hello through the bridge\./);
+
+  const fallback = join(state, 'opencode-v1.db');
+  env.FAKE_OPENCODE_DB_ERROR = 'Database is not empty and has no session table';
+  env.FAKE_OPENCODE_EXPECT_DB = fallback;
+  const first = await cli('run', 'Hello');
+  assert.match(first.stdout, /Using a separate session database/);
+  assert.match(first.stdout, /Hello through the bridge\./);
+
+  await writeFile(fallback, 'Existing Instinct Coder session database fixture.');
+  delete env.FAKE_OPENCODE_DB_ERROR;
+  assert.match((await cli('run', 'Hello')).stdout, /Hello through the bridge\./);
+
+  env.OPENCODE_DB = join(state, 'custom.db');
+  env.FAKE_OPENCODE_EXPECT_DB = env.OPENCODE_DB;
+  assert.match((await cli('run', 'Hello')).stdout, /Hello through the bridge\./);
+  assert.equal(await readFile(probeLog, 'utf8'), 'probe\nprobe\n');
 });
