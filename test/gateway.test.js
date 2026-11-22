@@ -24,12 +24,10 @@ async function testGateway(t) {
   await once(gateway, 'listening');
   t.after(() => new Promise((resolve) => gateway.close(resolve)));
   const baseURL = `http://127.0.0.1:${gateway.address().port}/v1`;
-  return {
-    baseURL,
-    post: (body) => fetch(`${baseURL}/chat/completions`, {
-      headers, method: 'POST', body: JSON.stringify({ model: 'instinct-whatsapp', messages: [user('Hello')], ...body }),
-    }),
-  };
+  const request = (route, body, auth = headers) => fetch(`${baseURL}/${route}`, {
+    headers: auth, method: 'POST', body: JSON.stringify({ model: 'instinct-whatsapp', ...body }),
+  });
+  return { baseURL, request, post: (body) => request('chat/completions', { messages: [user('Hello')], ...body }) };
 }
 
 test('requires a token and returns model discovery', async (t) => {
@@ -82,4 +80,89 @@ test('rejects oversized, non-text, and unknown-tool responses and reports timeou
   const timedOut = await post({ messages: [user('TIMEOUT_FIXTURE')] });
   assert.equal(timedOut.status, 504);
   assert.equal((await timedOut.json()).error.code, 'reply_timeout');
+});
+
+
+async function streamEvents(response) {
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /^text\/event-stream/);
+  const data = (await response.text()).split('\n').filter((line) => line.startsWith('data: '));
+  return data.map((line) => JSON.parse(line.slice(6)));
+}
+
+test('Responses streams a function call and accepts its output on the next turn', async (t) => {
+  const { request } = await testGateway(t);
+  const input = user('READ_BRIDGE_FIXTURE /tmp/bridge-fixture.txt');
+  const events = await streamEvents(await request('responses', {
+    input: [input], stream: true, tools: [{ type: 'function', ...read.function }],
+  }));
+  assert.equal(events[0].type, 'response.created');
+  assert.equal(events.at(-1).type, 'response.completed');
+  const [tool] = events.at(-1).response.output;
+  assert.equal(tool.type, 'function_call');
+  assert.equal(tool.name, 'read');
+  assert.deepEqual(JSON.parse(tool.arguments), { filePath: '/tmp/bridge-fixture.txt' });
+
+  const answer = await request('responses', { input: [
+    input, tool, { type: 'function_call_output', call_id: tool.call_id, output: 'bridge-fixture-verified' },
+  ] });
+  assert.equal(answer.status, 200);
+  assert.equal((await answer.json()).output[0].content[0].text, 'I read the file: bridge-fixture-verified');
+});
+
+test('Anthropic Messages accepts system blocks and round-trips a streaming tool call', async (t) => {
+  const { request } = await testGateway(t);
+  const auth = { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' };
+  const input = user('READ_BRIDGE_FIXTURE /tmp/bridge-fixture.txt');
+  const body = { messages: [{ role: 'system', content: [{ type: 'text', text: 'Use local tools.' }] }, input],
+    tools: [{ name: 'read', input_schema: { type: 'object' } }] };
+  const count = await request('messages/count_tokens', body, auth);
+  assert.equal(count.status, 200);
+  assert.ok((await count.json()).input_tokens > 0);
+  const events = await streamEvents(await request('messages?beta=true', { ...body, stream: true }, auth));
+  assert.equal(events[0].type, 'message_start');
+  assert.equal(events.at(-1).type, 'message_stop');
+  assert.equal(events.at(-2).delta.stop_reason, 'tool_use');
+  const tool = events.find((event) => event.type === 'content_block_start').content_block;
+  const args = JSON.parse(events.find((event) => event.type === 'content_block_delta').delta.partial_json);
+  assert.equal(tool.type, 'tool_use');
+  assert.deepEqual(args, { filePath: '/tmp/bridge-fixture.txt' });
+
+  const answer = await request('messages', { ...body, messages: [...body.messages,
+    { role: 'assistant', content: [{ ...tool, input: args }] },
+    user([{ type: 'tool_result', tool_use_id: tool.id, content: [{ type: 'text', text: 'bridge-fixture-verified' }] }]),
+  ] }, auth);
+  const result = await answer.json();
+  assert.equal(result.stop_reason, 'end_turn');
+  assert.equal(result.content[0].text, 'I read the file: bridge-fixture-verified');
+});
+
+test('Responses preserves raw custom-tool input and matches the output by call ID', async (t) => {
+  const { request } = await testGateway(t);
+  const input = user('CUSTOM_BRIDGE_FIXTURE');
+  const tools = [{ type: 'custom', name: 'apply_patch', format: { type: 'text' } }];
+  const events = await streamEvents(await request('responses', { input: [input], tools, stream: true }));
+  const [tool] = events.at(-1).response.output;
+  assert.equal(tool.type, 'custom_tool_call');
+  assert.equal(tool.input, 'Example patch text');
+  assert.ok(events.some((event) => event.type === 'response.custom_tool_call_input.delta'));
+
+  const answer = await request('responses', { input: [
+    input, tool, { type: 'custom_tool_call_output', call_id: tool.call_id, output: 'Patch applied.' },
+  ] });
+  assert.equal(answer.status, 200);
+  assert.equal((await answer.json()).output[0].content[0].text, 'Patch was applied.');
+});
+
+test('retries a wacli lock before send dispatch and reports streamed provider failures', async (t) => {
+  const { request, post } = await testGateway(t);
+  const retried = await post({ messages: [user('LOCK_BRIDGE_FIXTURE')] });
+  assert.equal(retried.status, 200);
+  assert.equal((await retried.json()).choices[0].message.content, 'Hello through the bridge.');
+
+  const events = await streamEvents(await request('responses', {
+    input: 'INVALID_TOOL', stream: true, tools: [{ type: 'function', ...read.function }],
+  }));
+  assert.equal(events.at(-1).type, 'response.failed');
+  assert.equal(events.at(-1).response.error.code, 'invalid_whatsapp_reply');
 });

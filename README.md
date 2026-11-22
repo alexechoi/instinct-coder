@@ -33,6 +33,17 @@ On your phone, open **WhatsApp → Linked devices → Link a device**, then scan
 
 In any project folder, run `~/.local/bin/instinct-coder`. It starts the bridge and opens OpenCode with Instinct selected. OpenCode asks before edits or shell commands. Quit OpenCode to stop the bridge.
 
+### Codex CLI and Claude Code
+
+Install the client you want to use, then run one of these commands from your project folder.
+
+```sh
+~/.local/bin/instinct-coder codex
+~/.local/bin/instinct-coder claude
+```
+
+Both use the same linked WhatsApp account for text and local tool calls. Claude Code support is experimental and starts with the file and shell tools that fit WhatsApp's message limit. Short sessions work best.
+
 The [bill splitter](examples/bill-splitter/index.html) was built in a live OpenCode session using Instinct tool calls over WhatsApp.
 
 Instinct receives your prompts, shared file contents, and tool results. Use an account authorized for automation and share files you have permission to send. [Instinct terms](https://instinct.com/terms) · [WhatsApp terms](https://www.whatsapp.com/legal/terms-of-service)

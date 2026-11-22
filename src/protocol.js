@@ -63,8 +63,8 @@ export function prepareTurn(body, maxChars) {
   if (!requireTool) replyShapes.push('{"text":"your complete answer"}');
   if (tools.length) replyShapes.push('{"tool_calls":[{"name":"tool_name","arguments":{"parameter":"value"}}]}');
   const prompt = [
-    'Complete one turn as the language model for a local OpenCode coding session.',
-    'Use only the request below for this turn. Do not take actions in any connected service or execute tools yourself. OpenCode executes the requested local tools and sends their results in a later turn.',
+    'Complete one turn as the language model for a local coding agent.',
+    'Use only the request below for this turn. Do not take actions in any connected service or execute tools yourself. The local coding agent executes requested tools and sends their results in a later turn.',
     'Send one WhatsApp text message. Put this exact line first:',
     marker,
     `After that line, send exactly one JSON object matching one of these shapes: ${replyShapes.join(' or ')}. Use valid JSON string escapes for line breaks and quotes.`,
@@ -74,7 +74,7 @@ export function prepareTurn(body, maxChars) {
   ].filter(Boolean).join('\n');
 
   if (prompt.length > maxChars) {
-    throw new BridgeError(413, 'prompt_too_large', `WhatsApp prompt has ${prompt.length} characters. The configured limit is ${maxChars}. Start a shorter OpenCode session or reduce tool output.`);
+    throw new BridgeError(413, 'prompt_too_large', `WhatsApp prompt has ${prompt.length} characters. The configured limit is ${maxChars}. Start a shorter session or reduce tool output.`);
   }
   if (Buffer.byteLength(prompt) > 120_000) {
     throw new BridgeError(413, 'prompt_too_large', 'The UTF-8 prompt exceeds the 120 kB limit for passing a message to wacli.');

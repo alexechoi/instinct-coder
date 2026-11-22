@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const [json, storeFlag, directory, group, action, ...flags] = process.argv.slice(2);
@@ -19,6 +19,12 @@ if (group === 'send' && action === 'text') {
   const { messages, tools } = JSON.parse(prompt.split('\n').at(-1));
   const latest = messages.at(-1);
   const transcript = JSON.stringify(messages);
+  const startup = join(directory, 'startup-lock');
+  if (transcript.includes('LOCK_BRIDGE_FIXTURE') && !existsSync(startup)) {
+    writeFileSync(startup, 'locked');
+    console.error(JSON.stringify({ success: false, error: 'store is locked (another wacli is running?): fixture' }));
+    process.exit(1);
+  }
   let reply = { text: 'Hello through the bridge.' };
   if (latest.role === 'user' && transcript.includes('READ_BRIDGE_FIXTURE') && tools.some((tool) => tool.name === 'read')) {
     const path = transcript.match(/\/[^\s"\\]+\/bridge-fixture\.txt/)?.[0];
@@ -28,6 +34,11 @@ if (group === 'send' && action === 'text') {
     assert.ok(latest.content.includes('bridge-fixture-verified'));
     assert.ok(latest.tool_call_id);
     reply = { text: 'I read the file: bridge-fixture-verified' };
+  } else if (latest.role === 'user' && transcript.includes('CUSTOM_BRIDGE_FIXTURE')) {
+    reply = { tool_calls: [{ name: 'apply_patch', arguments: { input: 'Example patch text' } }] };
+  } else if (latest.role === 'tool' && transcript.includes('CUSTOM_BRIDGE_FIXTURE')) {
+    assert.equal(latest.content, 'Patch applied.');
+    reply = { text: 'Patch was applied.' };
   } else if (transcript.includes('INVALID_TOOL')) {
     reply = { tool_calls: [{ name: 'undeclared', arguments: {} }] };
   }

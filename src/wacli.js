@@ -14,24 +14,39 @@ function normalizeDirectChat(value) {
   return directChat.test(normalized) ? normalized : null;
 }
 
+function lockedBeforeSend(stderr) {
+  try {
+    const lastLine = stderr?.trim().split('\n').at(-1);
+    return JSON.parse(lastLine).error?.startsWith('store is locked (another wacli is running?):');
+  } catch {
+    return false;
+  }
+}
+
 export function whatsappTransport({ chat = instinctChat, bin, store, pollMs }) {
   const target = normalizeDirectChat(chat);
   if (!target) throw new Error('Set INSTINCT_WHATSAPP_CHAT to an international number (+...) or direct WhatsApp JID.');
 
   async function run(args, operation, signal) {
     const storeArgs = store ? ['--store', store] : [];
-    try {
-      const { stdout } = await exec(bin, ['--json', ...storeArgs, ...args], {
-        signal,
-        timeout: 30_000,
-        maxBuffer: 16 * 1024 * 1024,
-      });
-      const result = JSON.parse(stdout);
-      if (result.success === true) return result.data;
-    } catch (error) {
-      signal.throwIfAborted();
-      if (error.code === 'ENOENT') {
-        throw new BridgeError(503, 'wacli_missing', 'Could not find wacli. Install it or set WACLI_BIN.');
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { stdout } = await exec(bin, ['--json', ...storeArgs, ...args], {
+          signal,
+          timeout: 30_000,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+        const result = JSON.parse(stdout);
+        if (result.success === true) return result.data;
+        break;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (error.code === 'ENOENT') {
+          throw new BridgeError(503, 'wacli_missing', 'Could not find wacli. Install it or set WACLI_BIN.');
+        }
+        // wacli reports this lock before dispatch when sync's send socket is still starting.
+        if (args[0] !== 'send' || attempt >= 20 || !lockedBeforeSend(error.stderr)) break;
+        await delay(200, undefined, { signal }).catch(() => signal.throwIfAborted());
       }
     }
     throw new BridgeError(502, 'wacli_error', `wacli could not ${operation}. Check the configured store and whether wacli sync --follow is running.`);
