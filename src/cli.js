@@ -4,12 +4,11 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { createInterface as promptInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createGateway } from './server.js';
 import { model } from './protocol.js';
-import { normalizeDirectChat, whatsappTransport } from './wacli.js';
+import { whatsappTransport } from './wacli.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const state = resolve(process.env.INSTINCT_CODER_STATE_DIR || join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'instinct-coder'));
@@ -27,10 +26,10 @@ async function readSettings() {
     if (error.code === 'ENOENT') return;
     throw new Error('Could not read the Instinct Coder settings.', { cause: error });
   }
-  if (!normalizeDirectChat(settings?.chat) || !/^[a-f0-9]{64}$/.test(settings?.key)) {
+  if (!/^[a-f0-9]{64}$/.test(settings?.key)) {
     throw new Error('The Instinct Coder settings file is invalid.');
   }
-  return settings;
+  return { key: settings.key };
 }
 
 async function paired() {
@@ -52,7 +51,7 @@ function outcome(child) {
 }
 
 async function launchGateway(settings) {
-  const complete = whatsappTransport({ chat: settings.chat, bin: wacli, store, pollMs: 1500 });
+  const complete = whatsappTransport({ bin: wacli, store, pollMs: 1500 });
   const server = createGateway({ key: settings.key, maxChars: 40_000, timeoutMs: 180_000, complete });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -63,20 +62,6 @@ async function launchGateway(settings) {
 
 async function setup(launcher) {
   const previous = await readSettings();
-  let chat = normalizeDirectChat(process.env.INSTINCT_WHATSAPP_CHAT || '');
-  if (!chat && process.env.INSTINCT_WHATSAPP_CHAT) throw new Error('Use an international Instinct phone number beginning with +.');
-  if (!chat) {
-    const input = promptInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const hint = previous ? ' (Enter to keep the current number)' : ' (include the country code, for example +15551234567)';
-      const answer = (await input.question(`Instinct’s WhatsApp number${hint}: `)).trim();
-      chat = answer ? normalizeDirectChat(answer) : previous?.chat;
-    } finally {
-      input.close();
-    }
-  }
-  if (!chat) throw new Error('Enter a valid international phone number or direct WhatsApp chat ID.');
-
   await mkdir(store, { recursive: true, mode: 0o700 });
   if (!await paired()) {
     console.log('On your phone, open WhatsApp → Linked devices → Link a device. Scan the QR below.');
@@ -89,7 +74,7 @@ async function setup(launcher) {
     console.log('WhatsApp is already linked.');
   }
 
-  const settings = { key: previous?.key || randomBytes(32).toString('hex'), chat };
+  const settings = { key: previous?.key || randomBytes(32).toString('hex') };
   const { server, baseURL } = await launchGateway(settings);
   try {
     const response = await fetch(`${baseURL}/models`, {

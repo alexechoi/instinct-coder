@@ -4,16 +4,17 @@ import { promisify } from 'node:util';
 import { BridgeError, parseReply } from './protocol.js';
 
 const exec = promisify(execFile);
+const instinctChat = '+16508702892';
 const directChat = /^(?:\+[1-9]\d{4,14}|\d+@(?:s\.whatsapp\.net|lid))$/;
 
-export function normalizeDirectChat(value) {
+function normalizeDirectChat(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   const normalized = trimmed.startsWith('+') ? trimmed.replace(/[\s().-]/g, '') : trimmed;
   return directChat.test(normalized) ? normalized : null;
 }
 
-export function whatsappTransport({ chat, bin, store, pollMs }) {
+export function whatsappTransport({ chat = instinctChat, bin, store, pollMs }) {
   const target = normalizeDirectChat(chat);
   if (!target) throw new Error('Set INSTINCT_WHATSAPP_CHAT to an international number (+...) or direct WhatsApp JID.');
 

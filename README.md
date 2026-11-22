@@ -11,7 +11,7 @@
 
 ## Get started
 
-Open a terminal on Linux or macOS 15 or later. Have your Instinct WhatsApp number and your phone handy.
+Open a terminal on Linux or macOS 15 or later and have your phone handy.
 
 **1. Install**
 
@@ -27,7 +27,7 @@ This installs Instinct Coder, OpenCode, and the WhatsApp connector for your user
 ~/.local/bin/instinct-coder setup
 ```
 
-Enter the number you use to message Instinct. On your phone, open **WhatsApp → Linked devices → Link a device**, then scan the QR code in your terminal.
+On your phone, open **WhatsApp → Linked devices → Link a device**, then scan the QR code in your terminal. Instinct Coder is already set to use **@textinstinct**.
 
 ## Start coding
 
@@ -42,6 +42,5 @@ Instinct receives your prompts, shared file contents, and tool results. Use an a
 
 - Run the install command again to update. Your WhatsApp link and settings stay in your local state directory.
 - If WhatsApp disconnects, run the setup command to link it again.
-- If you're asked for a number, include the country code, such as `+1`.
 - Contributors can run `npm test` in a checkout.
 </details>
