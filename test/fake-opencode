@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+import assert from 'node:assert/strict';
+
+assert.deepEqual(process.argv.slice(2), ['run', 'Hello', '--model', 'instinct/instinct-whatsapp']);
+assert.equal(process.env.PWD, process.cwd());
+const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
+const { baseURL } = config.provider.instinct.options;
+const result = await fetch(`${baseURL}/chat/completions`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${process.env.INSTINCT_BRIDGE_KEY}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ model: 'instinct-whatsapp', messages: [{ role: 'user', content: 'Hello' }] }),
+});
+assert.equal(result.status, 200);
+console.log((await result.json()).choices[0].message.content);

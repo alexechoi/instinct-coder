@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="23" role="img" aria-label="WhatsApp: Live tested">
+  <title>WhatsApp: Live tested</title>
+  <clipPath id="frame"><rect width="144" height="23" rx="4"/></clipPath>
+  <g clip-path="url(#frame)">
+    <path fill="#182821" d="M0 0h70v23H0z"/>
+    <path fill="#1a6949" d="M70 0h74v23H70z"/>
+  </g>
+  <g fill="#f1fff8" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" text-anchor="middle">
+    <text x="35.0" y="15">WhatsApp</text>
+    <text x="107.0" y="15">Live tested</text>
+  </g>
+</svg>
