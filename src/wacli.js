@@ -6,8 +6,16 @@ import { BridgeError, parseReply } from './protocol.js';
 const exec = promisify(execFile);
 const directChat = /^(?:\+[1-9]\d{4,14}|\d+@(?:s\.whatsapp\.net|lid))$/;
 
+export function normalizeDirectChat(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const normalized = trimmed.startsWith('+') ? trimmed.replace(/[\s().-]/g, '') : trimmed;
+  return directChat.test(normalized) ? normalized : null;
+}
+
 export function whatsappTransport({ chat, bin, store, pollMs }) {
-  if (!directChat.test(chat)) throw new Error('Set INSTINCT_WHATSAPP_CHAT to an international number (+...) or direct WhatsApp JID.');
+  const target = normalizeDirectChat(chat);
+  if (!target) throw new Error('Set INSTINCT_WHATSAPP_CHAT to an international number (+...) or direct WhatsApp JID.');
 
   async function run(args, operation, signal) {
     const storeArgs = store ? ['--store', store] : [];
@@ -31,11 +39,11 @@ export function whatsappTransport({ chat, bin, store, pollMs }) {
   return async (turn, signal) => {
     signal.throwIfAborted();
     const after = new Date(Date.now() - 30_000).toISOString();
-    const sent = await run(['send', 'text', '--to', chat, '--no-preview', '--message', turn.prompt], 'send the WhatsApp prompt', signal);
+    const sent = await run(['send', 'text', '--to', target, '--no-preview', '--message', turn.prompt], 'send the WhatsApp prompt', signal);
     if (sent?.sent !== true || typeof sent.id !== 'string') {
       throw new BridgeError(502, 'unconfirmed_send', 'wacli did not confirm the send. Check WhatsApp before retrying.');
     }
-    const recipient = directChat.test(sent.to) ? sent.to : chat;
+    const recipient = normalizeDirectChat(sent.to) ?? target;
     let invalidReply = false;
     try {
       while (true) {

@@ -1,31 +1,47 @@
 # Instinct Coder
 
-Use Instinct as an OpenCode model over WhatsApp.
+![Instinct Coder cover showing a terminal connected to a chat bubble](docs/cover.webp)
 
-```text
-OpenCode ⇄ local gateway ⇄ wacli ⇄ WhatsApp ⇄ Instinct
+[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-273c35?style=flat-square)](#get-started)
+[![OpenCode](https://img.shields.io/badge/OpenCode-1.19.6-237655?style=flat-square)](https://github.com/anomalyco/opencode/releases/tag/v1.19.6)
+[![Live test](https://img.shields.io/badge/WhatsApp-live%20tested-237655?style=flat-square)](examples/bill-splitter/index.html)
+[![License](https://img.shields.io/badge/license-Apache%202.0-273c35?style=flat-square)](LICENSE)
+
+**Use Instinct as the model in OpenCode through your WhatsApp account.**
+
+## Get started
+
+Open a terminal on Linux or macOS 15 or later. Have your Instinct WhatsApp number and your phone handy.
+
+**1. Install**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alexechoi/instinct-coder/main/install.sh | sh
 ```
 
-## Quick start
+This installs Instinct Coder, OpenCode, and the WhatsApp connector for your user account.
 
-Requires Node.js 22.9+, [OpenCode 1.x](https://opencode.ai/docs/), and [wacli 0.26.1](https://github.com/openclaw/wacli/releases/tag/v0.26.1).
+**2. Link WhatsApp**
 
-1. Copy `.env.example` to `.env`. Use `openssl rand -hex 32` to generate `INSTINCT_BRIDGE_KEY`, and set `INSTINCT_WHATSAPP_CHAT` to the contact's international number or direct chat ID.
-2. Run `wacli --store ./.wacli auth` and scan the QR under **WhatsApp → Settings → Linked devices**.
-3. Leave `wacli --store ./.wacli sync --follow` running. Start the gateway with `npm start` in a second terminal.
-4. In a third terminal, run these commands from this checkout.
+```sh
+~/.local/bin/instinct-coder setup
+```
 
-   ```sh
-   set -a
-   . ./.env
-   set +a
-   export OPENCODE_CONFIG="$PWD/opencode.example.json"
-   cd /path/to/your/project
-   opencode -m instinct/instinct-whatsapp
-   ```
+Enter the number you use to message Instinct. On your phone, open **WhatsApp → Linked devices → Link a device**, then scan the QR code in your terminal.
 
-## Test status
+## Start coding
 
-Run `npm test` for simulated replies, tool calls, and timeouts. In a live test, OpenCode 1.19.6 built this [bill splitter](examples/bill-splitter/index.html) using a tool call from Instinct over WhatsApp.
+In any project folder, run `~/.local/bin/instinct-coder`. It starts the bridge and opens OpenCode with Instinct selected. OpenCode asks before edits or shell commands. Quit OpenCode to stop the bridge.
 
-The bridge handles text and forwards OpenCode context, including file contents and tool results, to the selected chat. Use an account authorized for automation. [Instinct terms](https://instinct.com/terms) · [WhatsApp terms](https://www.whatsapp.com/legal/terms-of-service)
+The [bill splitter](examples/bill-splitter/index.html) was built in a live OpenCode session using Instinct tool calls over WhatsApp.
+
+Instinct receives your prompts, shared file contents, and tool results. Use an account authorized for automation and share files you have permission to send. [Instinct terms](https://instinct.com/terms) · [WhatsApp terms](https://www.whatsapp.com/legal/terms-of-service)
+
+<details>
+<summary>Updates and troubleshooting</summary>
+
+- Run the install command again to update. Your WhatsApp link and settings stay in your local state directory.
+- If WhatsApp disconnects, run the setup command to link it again.
+- If you're asked for a number, include the country code, such as `+1`.
+- Contributors can run `npm test` in a checkout.
+</details>

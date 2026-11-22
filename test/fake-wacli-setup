@@ -1,0 +1,26 @@
+#!/usr/bin/env node
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const args = process.argv.slice(2);
+const store = args[args.indexOf('--store') + 1];
+const token = join(store, 'linked');
+if (args.includes('auth') && args.includes('status')) {
+  console.log(JSON.stringify({ success: true, data: { authenticated: existsSync(token) } }));
+} else if (args.includes('auth')) {
+  assert.ok(args.includes('--history-days'));
+  writeFileSync(token, 'linked', { flag: 'wx' });
+  console.log('Test QR');
+} else if (args.includes('sync')) {
+  writeFileSync(join(store, 'sync.pid'), String(process.pid));
+  console.error(JSON.stringify({ event: 'connected' }));
+  process.on('SIGTERM', () => process.exit(0));
+  setInterval(() => {}, 1000);
+} else {
+  const fixture = fileURLToPath(new URL('./fake-wacli', import.meta.url));
+  const result = spawnSync(fixture, args, { stdio: 'inherit' });
+  process.exitCode = result.status ?? 1;
+}
