@@ -7,10 +7,12 @@ const [json, storeFlag, directory, group, action, ...flags] = process.argv.slice
 assert.equal(json, '--json');
 assert.equal(storeFlag, '--store');
 const file = join(directory, 'round-trip.json');
+const chat = process.env.FAKE_WACLI_CHAT || '+15551234567';
+const jid = `${chat.slice(1)}@s.whatsapp.net`;
 let data;
 if (group === 'send' && action === 'text') {
   assert.equal(flags[0], '--to');
-  assert.equal(flags[1], '+15551234567');
+  assert.equal(flags[1], chat);
   assert.ok(flags.includes('--no-preview'));
   const prompt = flags[flags.indexOf('--message') + 1];
   const marker = prompt.match(/^OPENCODE [\da-f-]+$/m)[0];
@@ -30,11 +32,11 @@ if (group === 'send' && action === 'text') {
     reply = { tool_calls: [{ name: 'undeclared', arguments: {} }] };
   }
   writeFileSync(file, JSON.stringify({ marker, reply, silent: transcript.includes('TIMEOUT_FIXTURE') }));
-  data = { sent: true, id: 'fake-outgoing', to: '15551234567@s.whatsapp.net' };
+  data = { sent: true, id: 'fake-outgoing', to: jid };
 } else {
   assert.equal(group, 'messages');
   assert.equal(action, 'list');
-  assert.equal(flags[flags.indexOf('--chat') + 1], '15551234567@s.whatsapp.net');
+  assert.equal(flags[flags.indexOf('--chat') + 1], jid);
   assert.ok(flags.includes('--from-them'));
   const { marker, reply, silent } = JSON.parse(readFileSync(file, 'utf8'));
   data = { messages: [

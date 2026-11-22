@@ -135,7 +135,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const complete = whatsappTransport({
       bin: process.env.WACLI_BIN || 'wacli',
       store: process.env.WACLI_STORE_DIR,
-      chat: process.env.INSTINCT_WHATSAPP_CHAT ?? '',
+      chat: process.env.INSTINCT_WHATSAPP_CHAT || undefined,
       pollMs: integer('POLL_INTERVAL_MS', 1500, 250, 30_000),
     });
     const gateway = createGateway({

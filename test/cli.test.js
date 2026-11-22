@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -16,10 +16,11 @@ test('setup links WhatsApp once, and launch runs the gateway until OpenCode exit
   const env = {
     ...process.env,
     INSTINCT_CODER_STATE_DIR: state,
-    INSTINCT_WHATSAPP_CHAT: '+1 (555) 123-4567',
+    FAKE_WACLI_CHAT: '+16508702892',
     WACLI_BIN: path('./fake-wacli-setup'),
     OPENCODE_BIN: path('./fake-opencode'),
   };
+  delete env.INSTINCT_WHATSAPP_CHAT;
   const cli = (...args) => run(process.execPath, [path('../src/cli.js'), ...args], { env, timeout: 10_000 });
   await assert.rejects(cli('run', 'Hello'), /Finish setup first/);
   const first = await cli('setup');
@@ -29,13 +30,16 @@ test('setup links WhatsApp once, and launch runs the gateway until OpenCode exit
 
   const settings = join(state, 'settings.json');
   const initial = await readFile(settings, 'utf8');
-  assert.equal(JSON.parse(initial).chat, '+15551234567');
-  assert.match(JSON.parse(initial).key, /^[a-f0-9]{64}$/);
+  const { key } = JSON.parse(initial);
+  assert.match(key, /^[a-f0-9]{64}$/);
+  assert.deepEqual(JSON.parse(initial), { key });
   assert.equal((await stat(settings)).mode & 0o777, 0o600);
 
+  env.INSTINCT_WHATSAPP_CHAT = '+1 (555) 123-4567';
+  await writeFile(settings, JSON.stringify({ key, chat: '+15551234567' }));
+  assert.match((await cli('run', 'Hello')).stdout, /Hello through the bridge\./);
   assert.match((await cli('setup')).stdout, /already linked/);
   assert.equal(await readFile(settings, 'utf8'), initial);
-  assert.match((await cli('run', 'Hello')).stdout, /Hello through the bridge\./);
 
   const syncPid = Number(await readFile(join(state, 'whatsapp', 'sync.pid'), 'utf8'));
   assert.throws(() => process.kill(syncPid, 0), { code: 'ESRCH' });
