@@ -1,17 +1,20 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { BridgeError, model, prepareTurn } from './protocol.js';
 import { whatsappTransport } from './wacli.js';
 
-const maxBodyBytes = 1024 * 1024;
-const created = () => Math.floor(Date.now() / 1000);
-const sse = (response, value) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+import { anthropicMessages } from './anthropic.js';
+import { responses } from './responses.js';
+import { chatCompletions, sendJSON } from './wire.js';
 
-function sendJSON(response, status, value) {
-  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(value));
-}
+const maxBodyBytes = 1024 * 1024;
+const routes = new Map([
+  ['/v1/chat/completions', chatCompletions],
+  ['/v1/responses', responses],
+  ['/v1/messages', anthropicMessages],
+  ['/v1/messages/count_tokens', anthropicMessages],
+]);
 
 function authorized(header, key) {
   const received = Buffer.from(header ?? '');
@@ -62,59 +65,51 @@ export function createGateway({ key, maxChars, timeoutMs, complete }) {
   return createServer(async (request, response) => {
     const disconnect = new AbortController();
     response.once('close', () => disconnect.abort());
+    const path = request.url.split('?')[0];
+    const adapter = routes.get(path);
+    const anthropic = adapter === anthropicMessages || Boolean(request.headers['anthropic-version']);
+    const wire = adapter ?? (anthropic ? anthropicMessages : chatCompletions);
     let heartbeat;
+    let exchange;
     try {
-      if (!authorized(request.headers.authorization, key)) {
-        throw new BridgeError(401, 'unauthorized', 'Provide the bridge API key as a bearer token.');
+      const header = request.headers.authorization ?? (anthropic && request.headers['x-api-key']
+        ? `Bearer ${request.headers['x-api-key']}` : undefined);
+      if (!authorized(header, key)) {
+        throw new BridgeError(401, 'unauthorized', 'Provide the local bridge key.');
       }
-      if (request.method === 'GET' && request.url === '/v1/models') {
-        sendJSON(response, 200, { object: 'list', data: [{ id: model, object: 'model', created: 0, owned_by: 'local' }] });
+      if (request.method === 'GET' && (path === '/v1/models' || (anthropic && path === `/v1/models/${model}`))) {
+        const entry = anthropic
+          ? { id: model, type: 'model', display_name: 'Instinct via WhatsApp', created_at: '2026-11-22T00:00:00Z' }
+          : { id: model, object: 'model', created: 0, owned_by: 'local' };
+        const list = anthropic ? { data: [entry], first_id: model, last_id: model, has_more: false }
+          : { object: 'list', data: [entry] };
+        sendJSON(response, 200, path === '/v1/models' ? list : entry);
         return;
       }
-      if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
-        throw new BridgeError(404, 'not_found', 'Use POST /v1/chat/completions or GET /v1/models.');
+      if (request.method !== 'POST' || !adapter) {
+        throw new BridgeError(404, 'not_found', 'Use /v1/chat/completions, /v1/responses, or /v1/messages.');
       }
 
       const body = await readJSON(request);
-      const turn = prepareTurn(body, maxChars);
+      if (path === '/v1/messages/count_tokens') {
+        sendJSON(response, 200, anthropicMessages.count(body));
+        return;
+      }
+      const turn = prepareTurn(adapter.request(body), maxChars);
       if (queued >= 4) throw new BridgeError(429, 'bridge_busy', 'The WhatsApp queue is full. Try again when it has drained.');
       const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), disconnect.signal]);
-      const id = `chatcmpl-${randomUUID()}`;
-      const metadata = { id, model, created: created() };
-      const chunk = (delta, finish_reason = null) => sse(response, {
-        ...metadata, object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason }],
-      });
-      if (body.stream === true) {
-        response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
-        chunk({ role: 'assistant' });
-        heartbeat = setInterval(() => response.write(': waiting for WhatsApp\n\n'), 10_000);
-      }
+      exchange = adapter.open(response, body);
+      if (body.stream === true) heartbeat = setInterval(() => response.write(': waiting for WhatsApp\n\n'), 10_000);
 
-      const { content, finish, tool_calls } = await enqueue(turn, signal);
-      if (response.destroyed) return;
-      if (body.stream === true) {
-        chunk(tool_calls ? { tool_calls: tool_calls.map((call, index) => ({ ...call, index })) } : { content });
-        chunk({}, finish);
-        response.end('data: [DONE]\n\n');
-      } else {
-        sendJSON(response, 200, {
-          ...metadata, object: 'chat.completion', choices: [{
-            index: 0, message: { role: 'assistant', content, tool_calls }, finish_reason: finish,
-          }],
-        });
-      }
+      const result = await enqueue(turn, signal);
+      if (!response.destroyed) exchange.complete(result);
     } catch (error) {
       if (response.destroyed) return;
       const failure = error instanceof BridgeError ? error : error?.name === 'TimeoutError'
         ? new BridgeError(504, 'reply_timeout', 'The request expired while queued or waiting for a matching WhatsApp text reply. Check the chat and wacli sync.')
         : new BridgeError(500, 'bridge_error', 'The bridge could not complete the request.');
-      const value = { error: { message: failure.message, type: failure.code, code: failure.code } };
-      if (response.headersSent) {
-        sse(response, value);
-        response.end('data: [DONE]\n\n');
-      } else {
-        sendJSON(response, failure.status, value);
-      }
+      if (exchange?.fail) exchange.fail(failure);
+      else wire.error(response, failure);
     } finally {
       clearInterval(heartbeat);
     }

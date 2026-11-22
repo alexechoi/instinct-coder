@@ -1,0 +1,25 @@
+{
+  "models": [
+    {
+      "slug": "instinct-whatsapp",
+      "display_name": "Instinct via WhatsApp",
+      "description": "A text-only local coding provider",
+      "default_reasoning_level": null,
+      "supported_reasoning_levels": [],
+      "shell_type": "unified_exec",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "base_instructions": "You are a coding assistant. Use the available local tools for file and shell operations. Follow the user's request and project instructions. Report what you changed and what you verified.",
+      "supports_reasoning_summaries": false,
+      "support_verbosity": false,
+      "truncation_policy": { "mode": "tokens", "limit": 2000 },
+      "apply_patch_tool_type": "freeform",
+      "context_window": 10000,
+      "effective_context_window_percent": 90,
+      "input_modalities": ["text"],
+      "experimental_supported_tools": [],
+      "supports_search_tool": false
+    }
+  ]
+}

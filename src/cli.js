@@ -123,12 +123,55 @@ async function waitForSync(sync, ended) {
   }
 }
 
-async function start(args, launcher) {
+async function clientCommand(client, args, baseURL, key) {
+  const env = { ...process.env, PWD: process.cwd(), INSTINCT_BRIDGE_KEY: key };
+
+  if (client === 'codex') {
+    const provider = 'model_providers.instinct';
+    const flags = [
+      '--model', model, '-c', 'model_provider="instinct"',
+      '-c', `model_catalog_json=${JSON.stringify(join(root, 'codex.models.json'))}`,
+      '-c', `${provider}.name="Instinct via WhatsApp"`,
+      '-c', `${provider}.base_url=${JSON.stringify(baseURL)}`,
+      '-c', `${provider}.env_key="INSTINCT_BRIDGE_KEY"`,
+      '-c', `${provider}.wire_api="responses"`,
+      '-c', `${provider}.supports_websockets=false`,
+      '-c', `${provider}.request_max_retries=0`,
+      '-c', `${provider}.stream_max_retries=0`,
+      '-c', 'web_search="disabled"',
+    ];
+    return { bin: process.env.CODEX_BIN || 'codex', args: [...flags, ...args], env };
+  }
+
+  if (client === 'claude') {
+    delete env.ANTHROPIC_API_KEY;
+    Object.assign(env, {
+      ANTHROPIC_BASE_URL: new URL(baseURL).origin,
+      ANTHROPIC_AUTH_TOKEN: key,
+      ANTHROPIC_MODEL: model,
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
+      ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+      ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      ENABLE_TOOL_SEARCH: 'false',
+    });
+    const tools = args.some((arg) => arg === '--tools' || arg.startsWith('--tools='))
+      ? [] : ['--tools', 'Read,Write,Edit,Glob,Grep,Bash'];
+    return { bin: process.env.CLAUDE_BIN || 'claude', args: [...tools, ...args, '--model', model], env };
+  }
+
+  const config = JSON.parse(await readFile(join(root, 'opencode.example.json'), 'utf8'));
+  config.provider.instinct.options.baseURL = baseURL;
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
+  env.OPENCODE_DISABLE_AUTOUPDATE = 'true';
+  return { bin: opencode, args: [...args, '--model', `instinct/${model}`], env };
+}
+
+async function start(client, args, launcher) {
   const settings = await readSettings();
   if (!settings) throw new Error(`Finish setup first with ${launcher} setup.`);
   if (!await paired()) throw new Error(`WhatsApp is no longer linked. Run ${launcher} setup again.`);
 
-  const config = JSON.parse(await readFile(join(root, 'opencode.example.json'), 'utf8'));
   console.log('Connecting to WhatsApp…');
   let child;
   let server;
@@ -150,17 +193,8 @@ async function start(args, launcher) {
     const gateway = await launchGateway(settings);
     server = gateway.server;
     if (interrupted) return;
-    config.provider.instinct.options.baseURL = gateway.baseURL;
-    child = spawn(opencode, [...args, '--model', `instinct/${model}`], {
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        PWD: process.cwd(),
-        INSTINCT_BRIDGE_KEY: settings.key,
-        OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-        OPENCODE_DISABLE_AUTOUPDATE: 'true',
-      },
-    });
+    const command = await clientCommand(client, args, gateway.baseURL, settings.key);
+    child = spawn(command.bin, command.args, { stdio: 'inherit', env: command.env });
     const result = await Promise.race([
       outcome(child),
       syncEnded.then(() => {
@@ -168,7 +202,7 @@ async function start(args, launcher) {
         throw new Error('WhatsApp disconnected. Restart Instinct Coder to reconnect.');
       }),
     ]);
-    if (result.error) throw new Error('OpenCode could not start.', { cause: result.error });
+    if (result.error) throw new Error(`Could not start ${client}. Check that it is installed.`, { cause: result.error });
     process.exitCode = result.code ?? (result.signal ? 1 : 0);
   } finally {
     if (interrupted) process.exitCode = interrupted === 'SIGINT' ? 130 : 143;
@@ -187,9 +221,11 @@ try {
   if (command === 'setup') {
     await setup(launcher);
   } else if (command === '--help' || command === '-h') {
-    console.log(`Usage\n  ${launcher} setup              Link WhatsApp\n  ${launcher}                    Open OpenCode in this folder\n  ${launcher} run "your prompt"  Run one OpenCode task`);
+    console.log(`Usage\n  ${launcher} setup              Link WhatsApp\n  ${launcher}                    Open OpenCode in this folder\n  ${launcher} run "your prompt"  Run one OpenCode task\n  ${launcher} codex [args]     Open Codex CLI\n  ${launcher} claude [args]    Open Claude Code (experimental)`);
+  } else if (command === 'codex' || command === 'claude') {
+    await start(command, args, launcher);
   } else {
-    await start(command === 'start' || !command ? args : [command, ...args], launcher);
+    await start('opencode', command === 'start' || !command ? args : [command, ...args], launcher);
   }
 } catch (error) {
   const message = error.code === 'ENOENT' ? 'A required tool is missing. Run the installer again.' : error.message;
