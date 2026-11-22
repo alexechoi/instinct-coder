@@ -1,7 +1,20 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { appendFileSync } from 'node:fs';
 
-assert.deepEqual(process.argv.slice(2), ['run', 'Hello', '--model', 'instinct/instinct-whatsapp']);
+const args = process.argv.slice(2);
+if (args[0] === '--print-logs') {
+  assert.deepEqual(args, ['--print-logs', 'db', 'path']);
+  if (process.env.FAKE_OPENCODE_PROBE_LOG) appendFileSync(process.env.FAKE_OPENCODE_PROBE_LOG, 'probe\n');
+  if (process.env.FAKE_OPENCODE_DB_ERROR) {
+    console.error(process.env.FAKE_OPENCODE_DB_ERROR);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+assert.deepEqual(args, ['run', 'Hello', '--model', 'instinct/instinct-whatsapp']);
+assert.equal(process.env.OPENCODE_DB, process.env.FAKE_OPENCODE_EXPECT_DB);
 assert.equal(process.env.PWD, process.cwd());
 const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
 const { baseURL } = config.provider.instinct.options;

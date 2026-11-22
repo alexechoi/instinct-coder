@@ -1,6 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -123,6 +123,28 @@ async function waitForSync(sync, ended) {
   }
 }
 
+async function configureOpenCodeDatabase(env) {
+  if (env.OPENCODE_DB) return;
+  const fallback = join(state, 'opencode-v1.db');
+  try {
+    await access(fallback);
+    env.OPENCODE_DB = fallback;
+    return;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  try {
+    await exec(opencode, ['--print-logs', 'db', 'path'], {
+      env: { ...env, OPENCODE_DISABLE_MODELS_FETCH: '1' }, timeout: 5000,
+    });
+  } catch (error) {
+    if (![error.stderr, error.stdout].some((output) => output?.includes('Database is not empty and has no session table'))) return;
+    env.OPENCODE_DB = fallback;
+    console.log('OpenCode’s default database is incompatible. Using a separate session database for Instinct Coder.');
+  }
+}
+
 async function clientCommand(client, args, baseURL, key) {
   const env = { ...process.env, PWD: process.cwd(), INSTINCT_BRIDGE_KEY: key };
 
@@ -167,6 +189,7 @@ async function clientCommand(client, args, baseURL, key) {
   config.provider.instinct.options.baseURL = baseURL;
   env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
   env.OPENCODE_DISABLE_AUTOUPDATE = 'true';
+  await configureOpenCodeDatabase(env);
   return { bin: opencode, args: [...args, '--model', `instinct/${model}`], env };
 }
 
@@ -197,6 +220,7 @@ async function start(client, args, launcher) {
     server = gateway.server;
     if (interrupted) return;
     const command = await clientCommand(client, args, gateway.baseURL, settings.key);
+    if (interrupted) return;
     child = spawn(command.bin, command.args, { stdio: 'inherit', env: command.env });
     const result = await Promise.race([
       outcome(child),
