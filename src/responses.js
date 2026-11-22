@@ -1,4 +1,4 @@
-import { BridgeError, model } from './protocol.js';
+import { BridgeError, model, prepareTurn } from './protocol.js';
 import { chatCompletions, conversation, functionTool, identifier, invalid, openStream, sendJSON, sse, textBlocks, timestamp, toolCall } from './wire.js';
 
 const textTypes = ['input_text', 'output_text', 'text'];
@@ -90,7 +90,7 @@ function emitItem(emit, item, output_index) {
 }
 
 export const responses = {
-  request: prepare,
+  prepareTurn: (body, maxChars) => prepareTurn(prepare(body), maxChars),
   open(response, body) {
     const custom = new Set((body.tools ?? []).filter((tool) => tool?.type === 'custom').map((tool) => tool.name));
     const initial = {

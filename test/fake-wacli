@@ -34,6 +34,14 @@ if (group === 'send' && action === 'text') {
     assert.ok(latest.content.includes('bridge-fixture-verified'));
     assert.ok(latest.tool_call_id);
     reply = { text: 'I read the file: bridge-fixture-verified' };
+  } else if (transcript.includes('INSTRUCTION_BUDGET_FIXTURE')) {
+    assert.ok(latest.content.includes('/project with spaces/CLAUDE.md'));
+    assert.ok(latest.content.includes('using the local Read tool in small sections'));
+    assert.ok(latest.content.includes('Keep this original user message.'));
+    assert.ok(!latest.content.includes('oversized instruction text'));
+    if (transcript.includes('READ_INSTRUCTION_BUDGET_FIXTURE')) {
+      reply = { tool_calls: [{ name: 'Read', arguments: { file_path: '/project with spaces/CLAUDE.md', limit: 200 } }] };
+    }
   } else if (latest.role === 'user' && transcript.includes('CUSTOM_BRIDGE_FIXTURE')) {
     reply = { tool_calls: [{ name: 'apply_patch', arguments: { input: 'Example patch text' } }] };
   } else if (latest.role === 'tool' && transcript.includes('CUSTOM_BRIDGE_FIXTURE')) {

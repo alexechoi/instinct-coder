@@ -153,6 +153,9 @@ async function clientCommand(client, args, baseURL, key) {
       ANTHROPIC_DEFAULT_SONNET_MODEL: model,
       ANTHROPIC_DEFAULT_OPUS_MODEL: model,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: env.CLAUDE_CODE_MAX_CONTEXT_TOKENS || '10000',
+      // Let the bridge shorten inline project files before applying its character limit.
+      CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: env.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT || '1',
       ENABLE_TOOL_SEARCH: 'false',
     });
     const tools = args.some((arg) => arg === '--tools' || arg.startsWith('--tools='))
