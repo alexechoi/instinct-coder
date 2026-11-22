@@ -12,6 +12,8 @@ Instinct offers access without charge under its current terms, which restrict bo
 
 On Linux or macOS with Node.js 22.9 or newer, run `npm test` from this directory. There are no npm dependencies to install. The tests simulate the `wacli` command interface and cover text replies, a tool call and its result, concurrent requests, stale replies, and timeouts.
 
+An authorized live smoke test with OpenCode 1.19.6 and `wacli` 0.26.1 sent a prompt to Instinct on WhatsApp and returned the expected text to OpenCode. Tool calls and their results were exercised with the simulated contact.
+
 ## Connect a permitted WhatsApp account
 
 Install OpenCode and `wacli` v0.26.1 for your platform. Before configuring the bridge, confirm that your Instinct contact replies to an ordinary message in WhatsApp. [OpenCode installation](https://opencode.ai/docs/), [wacli releases](https://github.com/openclaw/wacli/releases/tag/v0.26.1)
