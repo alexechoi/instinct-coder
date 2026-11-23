@@ -68,7 +68,6 @@ Instinct receives your prompts, shared file contents, and tool results. Use an a
 - Run `instinct-coder update` to update. Your WhatsApp link and settings carry over. If your version predates `update`, rerun the install command once.
 - If WhatsApp stops connecting, run `instinct-coder repair` for guided help. Setup also checks live sync before it reports that you're ready.
 - If the bundled OpenCode finds an incompatible session database, Instinct Coder automatically opens a separate one.
-- If an OpenCode request is too large for WhatsApp, the bridge shortens tool history and points OpenCode to large instruction files it can read in sections. If the request still exceeds the limit, shorten it or try OpenCode’s `/compact` command.
-- To try sending the full context first, run `INSTINCT_CODER_MULTIPART=1 instinct-coder`. Oversized requests can use up to two WhatsApp messages of 40,000 characters each, including the extra instructions. Larger requests use the single-message recovery above.
+- OpenCode automatically uses up to two WhatsApp messages of 40,000 characters each for large requests. The bridge can excerpt tool history and skill descriptions, and point OpenCode to large instruction files it can read in sections. Run `INSTINCT_CODER_MULTIPART=0 instinct-coder` to use one message per request.
 - Contributors can run `npm test` in a checkout.
 </details>

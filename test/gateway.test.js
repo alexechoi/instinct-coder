@@ -128,7 +128,7 @@ test('OpenCode fits large instruction files and completed tool history without t
 });
 
 test('OpenCode multipart leaves normal requests alone and bounds oversized UTF-8 requests to two messages', async (t) => {
-  const auth = { ...headers, 'x-instinct-coder-client': 'opencode', 'x-instinct-coder-multipart': '1' };
+  const auth = { ...headers, 'x-instinct-coder-client': 'opencode' };
   const short = user('Hello');
   const oversized = user('前'.repeat(40_000) + '🎴'.repeat(8_000) + ' end of request');
   const dispatch = (turn) => {
@@ -156,7 +156,71 @@ test('OpenCode multipart leaves normal requests alone and bounds oversized UTF-8
   }
   const tooLarge = await request('chat/completions', { messages: [user('前'.repeat(81_000))] }, auth);
   assert.equal(tooLarge.status, 400);
-  assert.equal((await tooLarge.json()).error.code, 'whatsapp_context_limit');
+  const { error } = await tooLarge.json();
+  assert.equal(error.code, 'whatsapp_context_limit');
+  assert.match(error.message, /two 40,000-character WhatsApp messages/);
+  assert.match(error.message, /reduce the amount of text attached to the task/);
+
+  const single = await request('chat/completions', { messages: [oversized] }, { ...auth, 'x-instinct-coder-multipart': '0' });
+  assert.equal(single.status, 400);
+  assert.match((await single.json()).error.message, /one 40,000-character WhatsApp message/);
+});
+
+test('OpenCode can send a short first task when the skill catalog and tools exceed the two-message budget', async (t) => {
+  const auth = { ...headers, 'x-instinct-coder-client': 'opencode' };
+  const task = user('Build a simple in-browser todo app.');
+  const skillList = Array.from({ length: 65 }, (_, index) => [
+    '<skill>',
+    `<name>workflow-${index}</name>`,
+    `<description>${'Detailed workflow information. '.repeat(45)}</description>`,
+    `<location>/project/skills/workflow-${index}/SKILL.md</location>`,
+    '</skill>',
+  ].join('\n')).join('\n');
+  const system = { role: 'system', content: `Use local tools.\n<available_skills>\n${skillList}\n</available_skills>\nKeep these instructions.` };
+  const skillTool = { type: 'function', function: {
+    name: 'skill',
+    description: 'Load a workflow by name.\n' + 'Detailed tool guidance. '.repeat(3_000) + '\nNames are case-sensitive.',
+    parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+  } };
+  const dispatch = (turn) => {
+    const chunks = (turn.promptParts ?? []).map((part) => {
+      assert.ok(part.length <= 40_000);
+      return part.split('<context-part>\n')[1].split('\n</context-part>')[0];
+    });
+    const context = JSON.parse(chunks.length ? chunks.join('') : turn.prompt.split('\n').at(-1));
+    const [retained, request] = context.messages;
+    assert.deepEqual(request, task);
+    const [tool] = context.tools;
+    assert.equal(tool.name, 'skill');
+    assert.deepEqual(tool.parameters, skillTool.function.parameters);
+    assert.match(tool.description, /^Load a workflow by name\.[\s\S]*excerpt shortened by Instinct Coder[\s\S]*Names are case-sensitive\.$/);
+    assert.match(retained.content, /^Use local tools\./);
+    assert.match(retained.content, /Keep these instructions\.$/);
+    assert.equal(retained.content.match(/<name>/g).length, 65);
+    assert.match(retained.content, /<location>\/project\/skills\/workflow-64\/SKILL\.md<\/location>/);
+    assert.match(retained.content, /excerpt shortened by Instinct Coder/);
+    assert.ok(retained.content.length < 30_000);
+    return { content: 'Ready to build.', finish: 'stop' };
+  };
+  const { request } = await testGateway(t, { maxChars: 40_000, dispatch });
+  const response = await request('chat/completions', { messages: [system, task], tools: [skillTool] }, auth);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).choices[0].message.content, 'Ready to build.');
+
+  const impossible = { role: 'system', content: 'System policy '.repeat(7_000) };
+  const rejected = await request('chat/completions', { messages: [impossible, task] }, auth);
+  assert.equal(rejected.status, 400);
+  const { error } = await rejected.json();
+  assert.equal(error.code, 'whatsapp_context_limit');
+  assert.match(error.message, /in instructions and tool definitions/);
+  assert.match(error.message, /Reduce OpenCode’s project instructions/);
+  assert.doesNotMatch(error.message, /System policy/);
+
+  const beyondHTTPBudget = { messages: [user('a'.repeat(1024 * 1024))] };
+  const responseBeyondHTTPBudget = await request('chat/completions', beyondHTTPBudget, auth);
+  assert.equal(responseBeyondHTTPBudget.status, 400);
+  assert.equal((await responseBeyondHTTPBudget.json()).error.code, 'body_too_large');
+  assert.equal((await request('chat/completions', beyondHTTPBudget)).status, 413);
 });
 
 

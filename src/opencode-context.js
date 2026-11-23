@@ -63,15 +63,28 @@ function shortenArguments(args, limit) {
   }
 }
 
-export function fitOpenCodePrompt(messages, tools, maxChars, render, fits) {
+function shortenSkillCatalog(content) {
+  return content?.replace(/<available_skills>[\s\S]*?<\/available_skills>/g, (catalog) =>
+    catalog.replace(/(<description>)([\s\S]*?)(<\/description>)/g, (_, start, description, end) =>
+      start + excerpt(description, 180) + end));
+}
+
+export function fitOpenCodePrompt(messages, tools, maxChars, pack) {
   const completedCalls = new Set(messages.filter((message) => message.role === 'tool').map((message) => message.tool_call_id));
   const canRead = tools.some((tool) => tool.name === 'read');
-  for (const cap of [6_000, 2_000, 800]) {
+  const canLoadSkills = tools.some((tool) => tool.name === 'skill');
+  const options = [
+    { cap: 6_000 }, { cap: 2_000 }, { cap: 800 },
+    { cap: 800, shortenSkills: true },
+    { cap: 800, shortenSkills: true, shortenTools: true },
+  ];
+  for (const { cap, shortenSkills, shortenTools } of options) {
     const limit = Math.max(250, Math.min(cap, Math.floor(maxChars / 5)));
     const instructionFiles = new Set();
     const context = messages.map((message) => {
-      if (message.role === 'system' && canRead) {
-        return { ...message, content: deferInstructions(message.content, limit, instructionFiles) };
+      if (message.role === 'system') {
+        const content = canRead ? deferInstructions(message.content, limit, instructionFiles) : message.content;
+        return { ...message, content: shortenSkills && canLoadSkills ? shortenSkillCatalog(content) : content };
       }
       if (message.role === 'tool') return { ...message, content: excerpt(message.content, limit) };
       if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
@@ -83,8 +96,13 @@ export function fitOpenCodePrompt(messages, tools, maxChars, render, fits) {
       }
       return message;
     });
-    const note = 'Earlier tool arguments and results may be excerpts. Inspect local files and run focused commands when you need more detail.';
-    const prompt = render(JSON.stringify({ tools, messages: context }), note);
-    if (fits(prompt)) return { prompt, instructionFiles };
+    const availableTools = shortenTools ? tools.map((tool) => ({ ...tool, description: excerpt(tool.description, 800) })) : tools;
+    const note = [
+      'Earlier tool arguments and results may be excerpts. Inspect local files and run focused commands when you need more detail.',
+      shortenSkills && canLoadSkills && 'Skill descriptions may be excerpts. Use the skill tool to load the full workflow.',
+      shortenTools && 'Tool descriptions may be excerpts. Use the supplied parameter schemas.',
+    ].filter(Boolean).join('\n');
+    const packed = pack(JSON.stringify({ tools: availableTools, messages: context }), note);
+    if (packed) return { ...packed, instructionFiles };
   }
 }
