@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,10 +16,21 @@ if (args.includes('auth') && args.includes('status')) {
   writeFileSync(token, 'linked', { flag: 'wx' });
   console.log('Test QR');
 } else if (args.includes('sync')) {
-  writeFileSync(join(store, 'sync.pid'), String(process.pid));
   console.error(JSON.stringify({ event: 'connected' }));
-  process.on('SIGTERM', () => process.exit(0));
-  setInterval(() => {}, 1000);
+  const errorFile = join(store, 'sync-error');
+  const error = process.env.FAKE_WACLI_SYNC_ERROR || (existsSync(errorFile) ? readFileSync(errorFile, 'utf8') : '');
+  if (error) {
+    console.error(JSON.stringify({ event: 'error', data: { message: error } }));
+    process.exit(1);
+  }
+  writeFileSync(join(store, 'sync.pid'), String(process.pid));
+  const socket = join(store, '.send.sock');
+  const server = createServer((connection) => connection.destroy());
+  server.listen(socket);
+  process.on('SIGTERM', () => server.close(() => {
+    rmSync(socket, { force: true });
+    process.exit(0);
+  }));
 } else {
   const fixture = fileURLToPath(new URL('./fake-wacli', import.meta.url));
   const result = spawnSync(fixture, args, { stdio: 'inherit' });

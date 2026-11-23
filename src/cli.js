@@ -3,12 +3,12 @@ import { randomBytes } from 'node:crypto';
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createGateway } from './server.js';
 import { model } from './protocol.js';
 import { whatsappTransport } from './wacli.js';
+import { openWhatsApp, outcome, WhatsAppIssue } from './whatsapp-session.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const state = resolve(process.env.INSTINCT_CODER_STATE_DIR || join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'instinct-coder'));
@@ -32,22 +32,24 @@ async function readSettings() {
   return { key: settings.key };
 }
 
-async function paired() {
-  try {
-    const { stdout } = await exec(wacli, ['--store', store, '--read-only', '--json', 'auth', 'status'], { timeout: 10_000 });
-    const result = JSON.parse(stdout);
-    if (result.success === true) return result.data.authenticated === true;
-  } catch (error) {
-    if (error.code === 'ENOENT') throw error;
-  }
-  throw new Error('Could not check the WhatsApp link.');
-}
+const whatsapp = { bin: wacli, store };
 
-function outcome(child) {
-  return new Promise((resolve) => {
-    child.once('error', (error) => resolve({ error }));
-    child.once('close', (code, signal) => resolve({ code, signal }));
-  });
+function watchInterrupts(onInterrupt) {
+  const controller = new AbortController();
+  const interrupt = (signal) => {
+    process.exitCode = signal === 'SIGINT' ? 130 : 143;
+    controller.abort();
+    onInterrupt?.(signal);
+  };
+  process.on('SIGINT', interrupt);
+  process.on('SIGTERM', interrupt);
+  return {
+    signal: controller.signal,
+    restore() {
+      process.off('SIGINT', interrupt);
+      process.off('SIGTERM', interrupt);
+    },
+  };
 }
 
 async function launchGateway(settings) {
@@ -60,66 +62,41 @@ async function launchGateway(settings) {
   return { server, baseURL: `http://127.0.0.1:${server.address().port}/v1` };
 }
 
-async function setup(launcher) {
-  const previous = await readSettings();
-  await mkdir(store, { recursive: true, mode: 0o700 });
-  if (!await paired()) {
-    console.log('On your phone, open WhatsApp → Linked devices → Link a device. Scan the QR below.');
-    const auth = spawn(wacli, ['--store', store, 'auth', '--history-days', '1', '--history-max-per-chat', '1', '--idle-exit', '5s'], { stdio: 'inherit' });
-    const result = await outcome(auth);
-    if (result.error || result.code !== 0 || !await paired()) {
-      throw new Error('WhatsApp pairing did not complete. Run setup again to get a new QR.');
-    }
-  } else {
-    console.log('WhatsApp is already linked.');
-  }
-
-  const settings = { key: previous?.key || randomBytes(32).toString('hex') };
-  const { server, baseURL } = await launchGateway(settings);
+async function setup(launcher, repairing = false) {
+  const { signal, restore } = watchInterrupts();
   try {
-    const response = await fetch(`${baseURL}/models`, {
-      headers: { Authorization: `Bearer ${settings.key}` },
-      signal: AbortSignal.timeout(5000),
-    });
-    const result = await response.json();
-    if (!response.ok || result.data?.[0]?.id !== model) throw new Error('The local gateway did not respond as expected.');
-  } finally {
-    server.closeAllConnections();
-    server.close();
-  }
+    const previous = await readSettings();
+    await mkdir(store, { recursive: true, mode: 0o700 });
+    console.log('Checking WhatsApp sync…');
+    const sync = await openWhatsApp(whatsapp, { signal, setup: !repairing });
+    await sync.stop();
+    signal.throwIfAborted();
+    console.log('WhatsApp sync is working.');
 
-  const staging = `${settingsPath}.${randomBytes(8).toString('hex')}.tmp`;
-  try {
-    await writeFile(staging, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-    await rename(staging, settingsPath);
-  } finally {
-    await rm(staging, { force: true });
-  }
-  console.log(`Ready. Open a project folder and run:\n  ${launcher}`);
-}
-
-async function waitForSync(sync, ended) {
-  const lines = createInterface({ input: sync.stderr });
-  let timer;
-  try {
-    const ready = new Promise((resolve) => {
-      lines.on('line', (line) => {
-        try {
-          if (JSON.parse(line).event === 'connected') resolve();
-        } catch {
-          // Keep diagnostics and message events out of the terminal.
-        }
+    const settings = { key: previous?.key || randomBytes(32).toString('hex') };
+    const { server, baseURL } = await launchGateway(settings);
+    try {
+      const response = await fetch(`${baseURL}/models`, {
+        headers: { Authorization: `Bearer ${settings.key}` },
+        signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
       });
-    });
-    const failure = ended.then(() => { throw new Error('WhatsApp sync stopped. Close any other Instinct Coder session and try again.'); });
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('WhatsApp did not connect. Check your connection or run setup again.')), 20_000);
-    });
-    await Promise.race([ready, failure, timeout]);
+      const result = await response.json();
+      if (!response.ok || result.data?.[0]?.id !== model) throw new Error('The local gateway did not respond as expected.');
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+
+    const staging = `${settingsPath}.${randomBytes(8).toString('hex')}.tmp`;
+    try {
+      await writeFile(staging, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      await rename(staging, settingsPath);
+    } finally {
+      await rm(staging, { force: true });
+    }
+    console.log(`Ready. Open a project folder and run:\n  ${launcher}`);
   } finally {
-    clearTimeout(timer);
-    lines.close();
-    sync.stderr.resume();
+    restore();
   }
 }
 
@@ -196,49 +173,39 @@ async function clientCommand(client, args, baseURL, key) {
 async function start(client, args, launcher) {
   const settings = await readSettings();
   if (!settings) throw new Error(`Finish setup first with ${launcher} setup.`);
-  if (!await paired()) throw new Error(`WhatsApp is no longer linked. Run ${launcher} setup again.`);
 
   console.log('Connecting to WhatsApp…');
   let child;
   let server;
-  let interrupted;
-  const sync = spawn(wacli, ['--store', store, '--events', 'sync', '--follow', '--presence-mode', 'quiet'], {
-    stdio: ['ignore', 'ignore', 'pipe'],
-  });
-  const syncEnded = outcome(sync);
-  const interrupt = (signal) => {
-    interrupted = signal;
-    child?.kill(signal);
-    sync.kill('SIGTERM');
-  };
-  process.on('SIGINT', interrupt);
-  process.on('SIGTERM', interrupt);
+  let sync;
+  const { signal, restore } = watchInterrupts((signal) => child?.kill(signal));
 
   try {
-    await waitForSync(sync, syncEnded);
+    sync = await openWhatsApp(whatsapp, { signal });
     const gateway = await launchGateway(settings);
     server = gateway.server;
-    if (interrupted) return;
+    signal.throwIfAborted();
     const command = await clientCommand(client, args, gateway.baseURL, settings.key);
-    if (interrupted) return;
+    signal.throwIfAborted();
     child = spawn(command.bin, command.args, { stdio: 'inherit', env: command.env });
     const result = await Promise.race([
       outcome(child),
-      syncEnded.then(() => {
-        if (interrupted) return {};
-        throw new Error('WhatsApp disconnected. Restart Instinct Coder to reconnect.');
+      sync.ended.then((failure) => {
+        signal.throwIfAborted();
+        throw failure;
       }),
     ]);
     if (result.error) throw new Error(`Could not start ${client}. Check that it is installed.`, { cause: result.error });
-    process.exitCode = result.code ?? (result.signal ? 1 : 0);
+    if (!signal.aborted) process.exitCode = result.code ?? (result.signal ? 1 : 0);
   } finally {
-    if (interrupted) process.exitCode = interrupted === 'SIGINT' ? 130 : 143;
-    process.off('SIGINT', interrupt);
-    process.off('SIGTERM', interrupt);
-    child?.kill('SIGTERM');
-    sync.kill('SIGTERM');
-    server?.closeAllConnections();
-    server?.close();
+    try {
+      child?.kill('SIGTERM');
+      server?.closeAllConnections();
+      server?.close();
+      await sync?.stop();
+    } finally {
+      restore();
+    }
   }
 }
 
@@ -247,8 +214,10 @@ const launcher = process.env.INSTINCT_CODER_COMMAND || 'instinct-coder';
 try {
   if (command === 'setup') {
     await setup(launcher);
+  } else if (command === 'repair') {
+    await setup(launcher, true);
   } else if (command === '--help' || command === '-h') {
-    console.log(`Usage\n  ${launcher} setup              Link WhatsApp\n  ${launcher}                    Open OpenCode in this folder\n  ${launcher} run "your prompt"  Run one OpenCode task\n  ${launcher} codex [args]     Open Codex CLI\n  ${launcher} claude [args]    Open Claude Code (experimental)`);
+    console.log(`Usage\n  ${launcher} setup              Link WhatsApp\n  ${launcher} repair             Check and repair the WhatsApp connection\n  ${launcher}                    Open OpenCode in this folder\n  ${launcher} run "your prompt"  Run one OpenCode task\n  ${launcher} codex [args]     Open Codex CLI\n  ${launcher} claude [args]    Open Claude Code (experimental)`);
   } else if (command === 'codex' || command === 'claude') {
     await start(command, args, launcher);
   } else {
@@ -258,6 +227,9 @@ try {
   const message = error.code === 'ENOENT' ? 'A required tool is missing. Run the installer again.' : error.message;
   if (!process.exitCode) {
     console.error(`Instinct Coder: ${message}`);
+    if (error instanceof WhatsAppIssue && command !== 'repair') {
+      console.error(`Open a terminal and run ${launcher} repair for help reconnecting.`);
+    }
     process.exitCode = 1;
   }
 }
