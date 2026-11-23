@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fitOpenCodePrompt, splitOpenCodePrompt } from './opencode-context.js';
 
 export const model = 'instinct-whatsapp';
 const record = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -23,7 +24,7 @@ function textContent(content) {
   return content.map((part) => part.text).join('\n');
 }
 
-export function prepareTurn(body, maxChars) {
+export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = false } = {}) {
   if (!record(body) || body.model !== model) invalid(`Use the model ${model}.`);
   if (!Array.isArray(body.messages) || body.messages.length === 0) invalid('Provide at least one message.');
   if (body.n !== undefined && body.n !== 1) invalid('The bridge supports one completion per request.');
@@ -62,24 +63,40 @@ export function prepareTurn(body, maxChars) {
   const replyShapes = [];
   if (!requireTool) replyShapes.push('{"text":"your complete answer"}');
   if (tools.length) replyShapes.push('{"tool_calls":[{"name":"tool_name","arguments":{"parameter":"value"}}]}');
-  const prompt = [
+  const replyInstructions = [
     'Complete one turn as the language model for a local coding agent.',
     'Use only the request below for this turn. Do not take actions in any connected service or execute tools yourself. The local coding agent executes requested tools and sends their results in a later turn.',
-    'Send one WhatsApp text message. Put this exact line first:',
+    'Reply in one WhatsApp text message. Put this exact line first:',
     marker,
     `After that line, send exactly one JSON object matching one of these shapes: ${replyShapes.join(' or ')}. Use valid JSON string escapes for line breaks and quotes.`,
     body.parallel_tool_calls === false ? 'Request at most one tool per turn.' : '',
+  ].filter(Boolean).join('\n');
+  const render = (context, note) => [
+    replyInstructions,
+    note,
     'The following JSON contains the conversation and available tools:',
-    JSON.stringify({ tools, messages }),
+    context,
   ].filter(Boolean).join('\n');
 
+  const fits = (prompt) => prompt.length <= maxChars && Buffer.byteLength(prompt) <= 120_000;
+  const context = JSON.stringify({ tools, messages });
+  const prompt = render(context);
+  const turn = { marker, prompt, tools: new Set(tools.map((tool) => tool.name)), requireTool, parallel: body.parallel_tool_calls !== false };
+  if (fits(prompt)) return turn;
+  if (fitOpenCode) {
+    if (multipart) {
+      const promptParts = splitOpenCodePrompt(replyInstructions, context, marker, maxChars, fits);
+      if (promptParts) return { ...turn, promptParts };
+    }
+    const fitted = fitOpenCodePrompt(messages, tools, maxChars, render, fits);
+    if (fitted) return { ...turn, ...fitted };
+    // OpenCode automatically compacts on HTTP 413 and retries with the same system instructions and tools.
+    throw new BridgeError(400, 'whatsapp_context_limit', 'The request could not fit in the WhatsApp message budget. Shorten the current request or compact the OpenCode session manually.');
+  }
   if (prompt.length > maxChars) {
     throw new BridgeError(413, 'prompt_too_large', `WhatsApp prompt has ${prompt.length} characters. The configured limit is ${maxChars}. Start a shorter session or reduce tool output.`);
   }
-  if (Buffer.byteLength(prompt) > 120_000) {
-    throw new BridgeError(413, 'prompt_too_large', 'The UTF-8 prompt exceeds the 120 kB limit for passing a message to wacli.');
-  }
-  return { marker, prompt, tools: new Set(tools.map((tool) => tool.name)), requireTool, parallel: body.parallel_tool_calls !== false };
+  throw new BridgeError(413, 'prompt_too_large', 'The UTF-8 prompt exceeds the 120 kB limit for passing a message to wacli.');
 }
 
 export function parseReply(turn, message) {
@@ -104,10 +121,15 @@ export function parseReply(turn, message) {
   return {
     content: null,
     finish: 'tool_calls',
-    tool_calls: calls.map(({ name, arguments: args }) => ({
-      id: `call_${randomUUID().replaceAll('-', '')}`,
-      type: 'function',
-      function: { name, arguments: JSON.stringify(args) },
-    })),
+    tool_calls: calls.map(({ name, arguments: args }) => {
+      if (name === 'read' && turn.instructionFiles?.has(args.filePath) && (args.limit === undefined || args.limit > 48)) {
+        args.limit = 48;
+      }
+      return {
+        id: `call_${randomUUID().replaceAll('-', '')}`,
+        type: 'function',
+        function: { name, arguments: JSON.stringify(args) },
+      };
+    }),
   };
 }

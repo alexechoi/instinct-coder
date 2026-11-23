@@ -208,6 +208,7 @@ async function clientCommand(client, args, baseURL, key) {
 
   const config = JSON.parse(await readFile(join(root, 'opencode.example.json'), 'utf8'));
   config.provider.instinct.options.baseURL = baseURL;
+  if (env.INSTINCT_CODER_MULTIPART === '1') config.provider.instinct.options.headers['x-instinct-coder-multipart'] = '1';
   env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
   env.OPENCODE_DISABLE_AUTOUPDATE = 'true';
   await configureOpenCodeDatabase(env);

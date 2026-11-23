@@ -95,7 +95,7 @@ export function createGateway({ key, maxChars, timeoutMs, complete }) {
         sendJSON(response, 200, anthropicMessages.count(body));
         return;
       }
-      const turn = adapter.prepareTurn(body, maxChars);
+      const turn = adapter.prepareTurn(body, maxChars, request.headers);
       if (queued >= 4) throw new BridgeError(429, 'bridge_busy', 'The WhatsApp queue is full. Try again when it has drained.');
       const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), disconnect.signal]);
       exchange = adapter.open(response, body, turn);
