@@ -3,11 +3,18 @@ import { chatCompletions, conversation, functionTool, identifier, invalid, openS
 
 const textTypes = ['input_text', 'output_text', 'text'];
 
+function responseContent(content) {
+  if (!Array.isArray(content)) return textBlocks(content, textTypes);
+  return content.map((part) => part?.type === 'input_image'
+    ? { type: 'image_url', image_url: { url: part.image_url } }
+    : { type: 'text', text: textBlocks([part], textTypes) });
+}
+
 function inputMessage(item) {
   if (!item || typeof item !== 'object') invalid('Invalid Responses input item.');
   switch (item.type ?? 'message') {
     case 'message':
-      return { role: item.role, content: textBlocks(item.content, textTypes) };
+      return { role: item.role, content: responseContent(item.content) };
     case 'function_call':
     case 'custom_tool_call': {
       const args = item.type === 'custom_tool_call' ? JSON.stringify({ input: item.input }) : item.arguments;
@@ -15,7 +22,7 @@ function inputMessage(item) {
     }
     case 'function_call_output':
     case 'custom_tool_call_output':
-      return { role: 'tool', tool_call_id: item.call_id, content: textBlocks(item.output, textTypes) };
+      return { role: 'tool', tool_call_id: item.call_id, content: responseContent(item.output) };
     case 'reasoning':
       return null;
     default:
@@ -90,7 +97,7 @@ function emitItem(emit, item, output_index) {
 }
 
 export const responses = {
-  prepareTurn: (body, maxChars) => prepareTurn(prepare(body), maxChars),
+  prepareTurn: (body, maxChars) => prepareTurn(prepare(body), maxChars, { multipart: true }),
   open(response, body) {
     const custom = new Set((body.tools ?? []).filter((tool) => tool?.type === 'custom').map((tool) => tool.name));
     const initial = {

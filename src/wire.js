@@ -3,7 +3,7 @@ import { BridgeError, model, prepareTurn } from './protocol.js';
 
 export const identifier = (prefix) => `${prefix}_${randomUUID().replaceAll('-', '')}`;
 export const timestamp = () => Math.floor(Date.now() / 1000);
-const isOpenCode = (headers) => headers['x-instinct-coder-client'] === 'opencode';
+const isOpenCode = (headers) => headers?.['x-instinct-coder-client'] === 'opencode';
 
 export function invalid(message) {
   throw new BridgeError(400, 'invalid_request', message);
@@ -53,10 +53,10 @@ export function sse(response, value, event) {
 
 export const chatCompletions = {
   prepareTurn(body, maxChars, headers) {
+    const openCode = isOpenCode(headers);
     return prepareTurn(body, maxChars, {
-      fitOpenCode: isOpenCode(headers),
-      multipart: headers['x-instinct-coder-multipart'] !== '0',
-      allowImages: true,
+      fitOpenCode: openCode,
+      multipart: openCode && headers['x-instinct-coder-multipart'] !== '0',
     });
   },
   open(response, body) {

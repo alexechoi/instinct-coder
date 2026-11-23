@@ -43,7 +43,7 @@ instinct-coder
 
 The launcher starts the WhatsApp bridge. OpenCode asks before edits or shell commands. Quit OpenCode to stop the bridge.
 
-Paste or attach a PNG or JPEG screenshot in OpenCode to show Instinct what you’re working on. Images are sent as WhatsApp attachments. You can attach up to four images, each up to 8 MiB and up to 15 MiB total.
+Paste or attach a PNG or JPEG screenshot in OpenCode to show Instinct what you’re working on. The bridge sends images as WhatsApp attachments.
 
 ### Codex CLI and Claude Code
 
@@ -54,7 +54,9 @@ instinct-coder codex
 instinct-coder claude
 ```
 
-Both use the same linked WhatsApp account for text and local tool calls. Claude Code support is experimental. For oversized project instruction reminders, Claude can read the linked files in sections. Short sessions work best.
+Both use the same linked WhatsApp account for text, PNG and JPEG attachments, and local tool calls. Attach screenshots with your client's image picker or paste shortcut. In Codex you can also pass `--image`. Claude Code support is experimental. For oversized project instruction reminders, Claude can read the linked files in sections.
+
+All three clients support up to four images per request, up to 8 MiB each and 15 MiB total.
 
 The [bill splitter](examples/bill-splitter/index.html) was built in a live OpenCode session using Instinct tool calls over WhatsApp.
 

@@ -24,16 +24,24 @@ function authorized(header, key) {
   return received.length === expected.length && timingSafeEqual(received, expected);
 }
 
-async function readJSON(request, allowImages) {
+function hasImageParts(content) {
+  return Array.isArray(content) && content.some((part) => ['image_url', 'input_image', 'image'].includes(part?.type));
+}
+
+function hasImageInput(body) {
+  const items = body?.messages ?? body?.input;
+  return Array.isArray(items) && items.some((item) => hasImageParts(item?.content) || hasImageParts(item?.output) ||
+    (Array.isArray(item?.content) && item.content.some((part) => part?.type === 'tool_result' && hasImageParts(part.content))));
+}
+
+async function readJSON(request) {
   const chunks = [];
   let bytes = 0;
-  const limit = allowImages ? maxImageBodyBytes : maxBodyBytes;
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     bytes += chunk.length;
-    if (bytes > limit) {
+    if (bytes > maxImageBodyBytes) {
       request.resume();
-      if (allowImages) throw new BridgeError(400, 'image_request_too_large', 'The request exceeds the upload budget. Attach fewer or smaller PNG or JPEG images.');
-      throw new BridgeError(413, 'body_too_large', 'Request body exceeds 1 MiB.');
+      throw new BridgeError(400, 'image_request_too_large', 'The request exceeds the upload budget. Attach fewer or smaller PNG or JPEG images.');
     }
     chunks.push(chunk);
   }
@@ -43,8 +51,7 @@ async function readJSON(request, allowImages) {
   } catch {
     throw new BridgeError(400, 'invalid_json', 'Send a valid JSON body.');
   }
-  if (bytes > maxBodyBytes && !(Array.isArray(body?.messages) && body.messages.some((message) =>
-    message?.role === 'user' && Array.isArray(message.content) && message.content.some((part) => part?.type === 'image_url')))) {
+  if (bytes > maxBodyBytes && !hasImageInput(body)) {
     throw new BridgeError(413, 'body_too_large', 'Request body exceeds 1 MiB.');
   }
   return body;
@@ -100,7 +107,7 @@ export function createGateway({ key, maxChars, timeoutMs, complete }) {
         throw new BridgeError(404, 'not_found', 'Use /v1/chat/completions, /v1/responses, or /v1/messages.');
       }
 
-      const body = await readJSON(request, adapter === chatCompletions);
+      const body = await readJSON(request);
       if (path === '/v1/messages/count_tokens') {
         sendJSON(response, 200, anthropicMessages.count(body));
         return;
