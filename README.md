@@ -41,7 +41,7 @@ From your project folder, launch OpenCode with Instinct selected.
 instinct-coder
 ```
 
-The launcher starts the WhatsApp bridge. OpenCode asks before edits or shell commands. Quit OpenCode to stop the bridge.
+OpenCode asks before edits or shell commands. Open more terminals to run OpenCode, Codex, or Claude Code on different projects. They share one WhatsApp bridge, which queues requests and stops after the last session exits.
 
 Paste or attach a PNG or JPEG screenshot in OpenCode to show Instinct what you’re working on. The bridge sends images as WhatsApp attachments.
 
@@ -69,7 +69,7 @@ Instinct receives your prompts, attached images, shared file contents, and tool 
 <details>
 <summary>Updates and troubleshooting</summary>
 
-- Run `instinct-coder update` to update. Your WhatsApp link and settings carry over. If your version predates `update`, rerun the install command once.
+- Run `instinct-coder update`, then restart any running sessions. Your WhatsApp link and settings carry over. If your version predates `update`, rerun the install command once.
 - If WhatsApp stops connecting, run `instinct-coder repair` for guided help. Setup also checks live sync before it reports that you're ready.
 - If the bundled OpenCode finds an incompatible session database, Instinct Coder automatically opens a separate one.
 - OpenCode automatically uses up to two WhatsApp messages of 40,000 characters each for large requests. The bridge can excerpt tool history and skill descriptions, and point OpenCode to large instruction files it can read in sections. Run `INSTINCT_CODER_MULTIPART=0 instinct-coder` to use one message per request.
