@@ -19,6 +19,18 @@ function instructionReferences(text, deferred) {
   ].join('\n');
 }
 
+function imageBlock(source) {
+  const url = source?.type === 'base64' && typeof source.media_type === 'string' && typeof source.data === 'string'
+    ? `data:${source.media_type};base64,${source.data}` : undefined;
+  return { type: 'image_url', image_url: { url } };
+}
+
+function toolResultContent(content) {
+  if (!Array.isArray(content)) return textBlocks(content, ['text']);
+  return content.map((block) => block?.type === 'image' ? imageBlock(block.source)
+    : { type: 'text', text: textBlocks([block], ['text']) });
+}
+
 function messages(input, deferred) {
   if (input?.role === 'system') return [{ role: 'system', content: textBlocks(input.content, ['text']) }];
   if (!input || !['user', 'assistant'].includes(input.role)) invalid('Expected a user or assistant message.');
@@ -31,7 +43,12 @@ function messages(input, deferred) {
       case 'text': {
         if (typeof block.text !== 'string') invalid('Expected a text block.');
         const text = input.role === 'user' ? instructionReferences(block.text, deferred) : block.text;
-        current.content = current.content === undefined ? text : `${current.content}\n${text}`;
+        (current.content ??= []).push({ type: 'text', text });
+        break;
+      }
+      case 'image': {
+        if (input.role !== 'user') invalid('Image attachments belong to user messages.');
+        (current.content ??= []).push(imageBlock(block.source));
         break;
       }
       case 'tool_use': {
@@ -44,7 +61,7 @@ function messages(input, deferred) {
         if (input.role !== 'user' || typeof block.tool_use_id !== 'string') invalid('Tool results require a tool-use ID.');
         if (current.content !== undefined) result.push(current);
         result.push({ role: 'tool', tool_call_id: block.tool_use_id,
-          content: textBlocks(block.content ?? '', ['text']) });
+          content: toolResultContent(block.content ?? '') });
         current = { role: input.role };
         break;
       case 'thinking':
@@ -89,21 +106,29 @@ function prepare(body, deferred) {
 }
 
 function tokens(value) {
-  return Math.ceil(Buffer.byteLength(JSON.stringify(value)) / 4);
+  // Estimate image tokens independently of the upload size.
+  let images = 0;
+  const text = JSON.stringify(value, (_, item) => {
+    if (item?.type !== 'image_url' || !item.image_url) return item;
+    images++;
+    return { type: 'image_url' };
+  });
+  return Math.ceil(Buffer.byteLength(text) / 4) + images * 1024;
 }
 
 export const anthropicMessages = {
   prepareTurn(body, maxChars) {
     const request = prepare(body);
+    const options = { multipart: true };
     try {
-      return prepareTurn(request, maxChars);
+      return prepareTurn(request, maxChars, options);
     } catch (error) {
       const choice = request.tool_choice;
       const canRead = choice !== 'none' && (typeof choice !== 'object' || choice.function.name === 'Read')
         && request.tools.some((tool) => tool.function.name === 'Read');
       if (!(error instanceof BridgeError) || error.code !== 'prompt_too_large' || !canRead) throw error;
       const deferred = { maxChars, files: new Set() };
-      const turn = prepareTurn(prepare(body, deferred), maxChars);
+      const turn = prepareTurn(prepare(body, deferred), maxChars, options);
       return { ...turn, instructionFiles: deferred.files };
     }
   },

@@ -60,7 +60,7 @@ function messageContent(content, attachments, currentUserMessage) {
   if (!Array.isArray(content)) invalid('Expected text or message content blocks.');
   return content.map((part) => {
     if (part?.type === 'text' && typeof part.text === 'string') return part.text;
-    if (!attachments || part?.type !== 'image_url') invalid('Only text and user image attachments are supported.');
+    if (!attachments || part?.type !== 'image_url') invalid('Expected text or an image attachment.');
 
     let image;
     if (attachments.images.length < maxImageCount) {
@@ -79,24 +79,28 @@ function messageContent(content, attachments, currentUserMessage) {
   }).join('\n');
 }
 
-export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = true, allowImages = false } = {}) {
+export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = false } = {}) {
   if (!record(body) || body.model !== model) invalid(`Use the model ${model}.`);
   if (!Array.isArray(body.messages) || body.messages.length === 0) invalid('Provide at least one message.');
   if (body.n !== undefined && body.n !== 1) invalid('The bridge supports one completion per request.');
   if (body.response_format && body.response_format.type !== 'text') invalid('Structured response_format is unsupported.');
   if (body.tools !== undefined && !Array.isArray(body.tools)) invalid('tools must be an array.');
 
-  // The client includes earlier images in history. Reserve attachment slots for the newest user turn first.
-  const attachments = { images: [], bytes: 0 };
-  const lastUser = body.messages.findLastIndex((message) => message?.role === 'user');
-  const messages = body.messages.toReversed().map((message, index) => {
+  for (const message of body.messages) {
     if (!record(message) || !['system', 'developer', 'user', 'assistant', 'tool'].includes(message.role)) {
       invalid('Unsupported message role.');
     }
+  }
+  // Reserve attachment slots for the newest user task before considering tool output or earlier messages.
+  const attachments = { images: [], bytes: 0 };
+  const lastUser = body.messages.findLastIndex((message) => message.role === 'user');
+  const currentContent = lastUser === -1 ? undefined : messageContent(body.messages[lastUser].content, attachments, true);
+  const messages = body.messages.toReversed().map((message, index) => {
+    const imageContent = ['user', 'tool'].includes(message.role);
     return {
       role: message.role,
-      content: messageContent(message.content, allowImages && message.role === 'user' ? attachments : undefined,
-        index === body.messages.length - 1 - lastUser),
+      content: index === body.messages.length - 1 - lastUser ? currentContent :
+        messageContent(message.content, imageContent ? attachments : undefined, false),
       name: message.name,
       tool_calls: message.tool_calls,
       tool_call_id: message.tool_call_id,
@@ -140,20 +144,21 @@ export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = t
 
   const fits = (prompt) => prompt.length <= maxChars && Buffer.byteLength(prompt) <= 120_000;
   const context = JSON.stringify({ tools, messages });
-  const prompt = render(context);
-  const turn = { marker, prompt, tools: new Set(tools.map((tool) => tool.name)), requireTool,
+  const turn = { marker, tools: new Set(tools.map((tool) => tool.name)), requireTool,
     parallel: body.parallel_tool_calls !== false, images: attachments.images };
-  if (fits(prompt)) return turn;
+  const pack = (context, note) => {
+    const prompt = render(context, note);
+    if (fits(prompt)) return { prompt };
+    if (!multipart) return;
+    const instructions = note ? `${replyInstructions}\n${note}` : replyInstructions;
+    const promptParts = splitOpenCodePrompt(instructions, context, marker, maxChars, fits);
+    if (promptParts) return { prompt, promptParts };
+  };
+  const packed = pack(context);
+  if (packed) return { ...turn, ...packed };
+  const prompt = render(context);
   if (fitOpenCode) {
-    const pack = (context, note) => {
-      const prompt = render(context, note);
-      if (fits(prompt)) return { prompt };
-      if (!multipart) return;
-      const instructions = note ? `${replyInstructions}\n${note}` : replyInstructions;
-      const promptParts = splitOpenCodePrompt(instructions, context, marker, maxChars, fits);
-      if (promptParts) return { prompt, promptParts };
-    };
-    const fitted = pack(context) ?? fitOpenCodePrompt(messages, tools, maxChars, pack);
+    const fitted = fitOpenCodePrompt(messages, tools, maxChars, pack);
     if (fitted) return { ...turn, ...fitted };
     // OpenCode automatically compacts on HTTP 413 and retries with the same system instructions and tools.
     throw openCodeLimitError(prompt, messages, tools, maxChars, multipart);

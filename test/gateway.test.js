@@ -117,6 +117,49 @@ test('reserves image slots for the current request and rejects excess or invalid
   assert.equal((await invalid.json()).error.code, 'invalid_image');
 });
 
+test('Codex and Claude accept several inline images, including tool images and large screenshots', async (t) => {
+  const large = Buffer.concat([tinyPng, Buffer.alloc(1024 * 1024)]);
+  const second = Buffer.concat([tinyPng, Buffer.from('second')]);
+  const fromTool = Buffer.concat([tinyPng, Buffer.from('tool')]);
+  const responsesImage = (data) => ({ type: 'input_image', image_url: image(data).image_url.url });
+  const anthropicImage = (data) => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: data.toString('base64') } });
+  const call = { id: 'capture', name: 'screenshot' };
+
+  const { request } = await testGateway(t, { dispatch: (turn) => {
+    assert.deepEqual(turn.images.map(({ data }) => data), [large, second, fromTool]);
+    assert.ok(!turn.prompt.includes('data:image'));
+    const context = JSON.parse(turn.prompt.split('\n').at(-1));
+    assert.equal(context.messages[0].content, '[WhatsApp image 1]\nInspect these images.\n[WhatsApp image 2]');
+    assert.equal(context.messages.at(-1).role, 'tool');
+    assert.equal(context.messages.at(-1).tool_call_id, call.id);
+    assert.equal(context.messages.at(-1).content, '[WhatsApp image 3]');
+    return { content: 'All three images received.', finish: 'stop' };
+  } });
+
+  const codex = await request('responses', { input: [
+    user([responsesImage(large), { type: 'input_text', text: 'Inspect these images.' }, responsesImage(second)]),
+    { type: 'function_call', call_id: call.id, name: call.name, arguments: '{}' },
+    { type: 'function_call_output', call_id: call.id, output: [responsesImage(fromTool)] },
+  ] });
+  assert.equal(codex.status, 200);
+  assert.equal((await codex.json()).output[0].content[0].text, 'All three images received.');
+
+  const claudeBody = { messages: [
+    user([anthropicImage(large), { type: 'text', text: 'Inspect these images.' }, anthropicImage(second)]),
+    { role: 'assistant', content: [{ type: 'tool_use', id: call.id, name: call.name, input: {} }] },
+    user([{ type: 'tool_result', tool_use_id: call.id, content: [anthropicImage(fromTool)] }]),
+  ] };
+  const auth = { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  const claude = await request('messages', claudeBody, auth);
+  assert.equal(claude.status, 200);
+  assert.equal((await claude.json()).content[0].text, 'All three images received.');
+
+  const count = await request('messages/count_tokens', claudeBody, auth);
+  assert.equal(count.status, 200);
+  const { input_tokens: tokens } = await count.json();
+  assert.ok(tokens >= 3 * 1024 && tokens < 4_000);
+});
+
 test('OpenCode fits large instruction files and completed tool history without triggering overflow compaction', async (t) => {
   const auth = { ...headers, 'x-instinct-coder-client': 'opencode' };
   const task = user('Build a matching card game.');
