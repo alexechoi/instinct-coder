@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { BridgeError, maxImageMiB, parseReply } from './protocol.js';
+import { BridgeError, inspectReply, maxImageMiB, requestReplyCorrection } from './protocol.js';
 
 const exec = promisify(execFile);
 const instinctChat = '+16508702892';
@@ -60,8 +60,8 @@ export function whatsappTransport({ chat = instinctChat, bin, store, pollMs }) {
     const after = new Date(Date.now() - 30_000).toISOString();
     let recipient = target;
     let hasSent = false;
-    const send = async (kind, args, operation) => {
-      if (hasSent) await delay(3_000, undefined, { signal }).catch(() => signal.throwIfAborted());
+    const send = async (kind, args, operation, pace = true) => {
+      if (hasSent && pace) await delay(3_000, undefined, { signal }).catch(() => signal.throwIfAborted());
       const sent = await run(['send', kind, '--to', target, ...args], operation, signal);
       if (sent?.sent !== true || typeof sent.id !== 'string') {
         throw new BridgeError(502, 'unconfirmed_send', 'wacli did not confirm the send. Check WhatsApp before retrying.');
@@ -90,7 +90,8 @@ export function whatsappTransport({ chat = instinctChat, bin, store, pollMs }) {
       const operation = parts.length === 1 ? 'send the WhatsApp prompt' : `send WhatsApp part ${index + 1} of ${parts.length}`;
       await send('text', ['--no-preview', '--message', message], operation);
     }
-    let invalidReply = false;
+    let active = turn;
+    let invalidReply;
     try {
       while (true) {
         const page = await run(['messages', 'list', '--chat', recipient, '--from-them', '--after', after, '--limit', '100'], 'read WhatsApp replies', signal);
@@ -98,18 +99,28 @@ export function whatsappTransport({ chat = instinctChat, bin, store, pollMs }) {
         if (messages !== null && !Array.isArray(messages)) {
           throw new BridgeError(502, 'wacli_error', 'wacli returned an unexpected messages list. Use wacli v0.26.1.');
         }
+        let reason;
         for (const message of messages ?? []) {
           if (message.FromMe !== false || typeof message.Text !== 'string') continue;
-          if (message.Text.trim().split(/\r?\n/, 1)[0] !== turn.marker) continue;
-          const reply = parseReply(turn, message.Text);
-          if (reply) return reply;
-          invalidReply = true;
+          const result = inspectReply(active, message.Text);
+          if (result?.reply) return result.reply;
+          reason ??= result?.reason;
+        }
+        if (reason) {
+          if (active !== turn) {
+            throw new BridgeError(422, 'invalid_whatsapp_reply', `${reason} Instinct's correction could not be used.`);
+          }
+          invalidReply = reason;
+          const correction = requestReplyCorrection(turn, reason);
+          active = { ...turn, marker: correction.marker };
+          // Instinct has already replied. The correction refers to the task and images already in the chat.
+          await send('text', ['--no-preview', '--message', correction.prompt], 'ask Instinct to correct its WhatsApp reply', false);
         }
         await delay(pollMs, undefined, { signal });
       }
     } catch (error) {
       if (invalidReply && signal.reason?.name === 'TimeoutError') {
-        throw new BridgeError(422, 'invalid_whatsapp_reply', 'A correlated WhatsApp reply arrived, but its JSON or requested tool was invalid.');
+        throw new BridgeError(422, 'invalid_whatsapp_reply', `${invalidReply} Instinct did not send a usable correction in time.`);
       }
       signal.throwIfAborted();
       throw error;

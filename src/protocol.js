@@ -79,6 +79,31 @@ function messageContent(content, attachments, currentUserMessage) {
   }).join('\n');
 }
 
+function replyFormat({ marker, tools, requireTool, parallel }) {
+  const shapes = [];
+  if (!requireTool) shapes.push('{"text":"your complete answer"}');
+  if (tools.size) shapes.push('{"tool_calls":[{"name":"tool_name","arguments":{"parameter":"value"}}]}');
+  return [
+    'Reply in one WhatsApp text message. Put this exact line first:',
+    marker,
+    `After that line, send exactly one JSON object matching ${shapes.join(' or ')}. Escape line breaks, quotes, and backslashes inside JSON strings.`,
+    ...(!parallel ? ['Request at most one tool per turn.'] : []),
+  ];
+}
+
+export function requestReplyCorrection(turn, reason) {
+  const marker = `OPENCODE ${randomUUID()}`;
+  const prompt = [
+    `Correct your reply for ${turn.marker}. ${reason}`,
+    'Continue from the original request, its images, and the local tool results it already included.',
+    'Use only the exact tool names declared in that request. The local coding agent executes requested tools.',
+    'If the edit is too long for one reply, request a focused edit so the local agent can continue in the next turn.',
+    'Send the corrected JSON without explanation or Markdown fences.',
+    ...replyFormat({ ...turn, marker }),
+  ].join('\n');
+  return { marker, prompt };
+}
+
 export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = false } = {}) {
   if (!record(body) || body.model !== model) invalid(`Use the model ${model}.`);
   if (!Array.isArray(body.messages) || body.messages.length === 0) invalid('Provide at least one message.');
@@ -123,17 +148,13 @@ export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = f
   if (requireTool && tools.length === 0) invalid('tool_choice requires a declared function.');
 
   const marker = `OPENCODE ${randomUUID()}`;
-  const replyShapes = [];
-  if (!requireTool) replyShapes.push('{"text":"your complete answer"}');
-  if (tools.length) replyShapes.push('{"tool_calls":[{"name":"tool_name","arguments":{"parameter":"value"}}]}');
+  const turn = { marker, tools: new Set(tools.map((tool) => tool.name)), requireTool,
+    parallel: body.parallel_tool_calls !== false, images: attachments.images };
   const replyInstructions = [
     'Complete one turn as the language model for a local coding agent.',
     'Use only this request for this turn. Do not take actions in any connected service or execute tools yourself. The local coding agent executes requested tools and sends their results in a later turn.',
     attachments.images.length && 'Placeholders such as [WhatsApp image 1] refer to the labeled WhatsApp image attachments sent immediately before this request. Inspect the actual images when relevant.',
-    'Reply in one WhatsApp text message. Put this exact line first:',
-    marker,
-    `After that line, send exactly one JSON object matching one of these shapes: ${replyShapes.join(' or ')}. Use valid JSON string escapes for line breaks and quotes.`,
-    body.parallel_tool_calls === false ? 'Request at most one tool per turn.' : '',
+    ...replyFormat(turn),
   ].filter(Boolean).join('\n');
   const render = (context, note) => [
     replyInstructions,
@@ -144,8 +165,6 @@ export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = f
 
   const fits = (prompt) => prompt.length <= maxChars && Buffer.byteLength(prompt) <= 120_000;
   const context = JSON.stringify({ tools, messages });
-  const turn = { marker, tools: new Set(tools.map((tool) => tool.name)), requireTool,
-    parallel: body.parallel_tool_calls !== false, images: attachments.images };
   const pack = (context, note) => {
     const prompt = render(context, note);
     if (fits(prompt)) return { prompt };
@@ -169,37 +188,51 @@ export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = f
   throw new BridgeError(413, 'prompt_too_large', 'The UTF-8 prompt exceeds the 120 kB limit for passing a message to wacli.');
 }
 
-export function parseReply(turn, message) {
+export function inspectReply(turn, message) {
   const reply = message.trim().replaceAll('\r\n', '\n');
-  if (!reply.startsWith(`${turn.marker}\n`)) return null;
+  if (reply.split('\n', 1)[0] !== turn.marker) return null;
   const payload = reply.slice(turn.marker.length + 1).trim();
   const fenced = payload.match(/^```(?:json)?[ \t]*\n([\s\S]+)\n```$/i);
   let result;
   try {
     result = JSON.parse(fenced?.[1] ?? payload);
   } catch {
-    return null;
+    return { reason: 'The WhatsApp reply was not valid JSON.' };
   }
-  if (!record(result)) return null;
+  if (!record(result)) return { reason: 'The WhatsApp reply needs a single JSON object.' };
   if (!turn.requireTool && typeof result.text === 'string' && result.text.trim() && result.tool_calls === undefined) {
-    return { content: result.text, finish: 'stop' };
+    return { reply: { content: result.text, finish: 'stop' } };
   }
-  const calls = result.tool_calls;
-  if (result.text !== undefined || !Array.isArray(calls) || !calls.length || (!turn.parallel && calls.length > 1)) return null;
-  if (!calls.every((call) => turn.tools.has(call?.name) && record(call.arguments))) return null;
+  if (result.text !== undefined || !Array.isArray(result.tool_calls) || !result.tool_calls.length) {
+    return { reason: 'The WhatsApp reply needs an allowed text answer or tool call.' };
+  }
+  if (!turn.parallel && result.tool_calls.length > 1) {
+    return { reason: 'The client allows only one tool call in this turn.' };
+  }
 
-  return {
-    content: null,
-    finish: 'tool_calls',
-    tool_calls: calls.map(({ name, arguments: args }) => {
-      if (name === 'read' && turn.instructionFiles?.has(args.filePath) && (args.limit === undefined || args.limit > 48)) {
-        args.limit = 48;
-      }
-      return {
-        id: `call_${randomUUID().replaceAll('-', '')}`,
-        type: 'function',
-        function: { name, arguments: JSON.stringify(args) },
-      };
-    }),
-  };
+  const tool_calls = [];
+  for (const call of result.tool_calls) {
+    const specification = call?.type === 'function' && !Object.hasOwn(call, 'name') && !Object.hasOwn(call, 'arguments')
+      ? call.function : call;
+    const name = specification?.name;
+    if (!turn.tools.has(name)) return { reason: 'Instinct asked for a tool unavailable in this request.' };
+    let args = specification.arguments;
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch { /* Invalid arguments are rejected below. */ }
+    }
+    if (!record(args)) return { reason: 'The tool arguments were not a valid JSON object.' };
+    if (name === 'read' && turn.instructionFiles?.has(args.filePath) && (args.limit === undefined || args.limit > 48)) {
+      args.limit = 48;
+    }
+    tool_calls.push({
+      id: `call_${randomUUID().replaceAll('-', '')}`,
+      type: 'function',
+      function: { name, arguments: JSON.stringify(args) },
+    });
+  }
+  return { reply: { content: null, finish: 'tool_calls', tool_calls } };
+}
+
+export function parseReply(turn, message) {
+  return inspectReply(turn, message)?.reply ?? null;
 }
