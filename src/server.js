@@ -9,6 +9,8 @@ import { responses } from './responses.js';
 import { chatCompletions, sendJSON } from './wire.js';
 
 const maxBodyBytes = 1024 * 1024;
+// Allow OpenCode's 25 MiB image history after base64 expansion so older images can be dropped before sending.
+const maxImageBodyBytes = 35 * 1024 * 1024;
 const routes = new Map([
   ['/v1/chat/completions', chatCompletions],
   ['/v1/responses', responses],
@@ -22,22 +24,30 @@ function authorized(header, key) {
   return received.length === expected.length && timingSafeEqual(received, expected);
 }
 
-async function readJSON(request) {
+async function readJSON(request, allowImages) {
   const chunks = [];
   let bytes = 0;
+  const limit = allowImages ? maxImageBodyBytes : maxBodyBytes;
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     bytes += chunk.length;
-    if (bytes > maxBodyBytes) {
+    if (bytes > limit) {
       request.resume();
+      if (allowImages) throw new BridgeError(400, 'image_request_too_large', 'The request exceeds the upload budget. Attach fewer or smaller PNG or JPEG images.');
       throw new BridgeError(413, 'body_too_large', 'Request body exceeds 1 MiB.');
     }
     chunks.push(chunk);
   }
+  let body;
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     throw new BridgeError(400, 'invalid_json', 'Send a valid JSON body.');
   }
+  if (bytes > maxBodyBytes && !(Array.isArray(body?.messages) && body.messages.some((message) =>
+    message?.role === 'user' && Array.isArray(message.content) && message.content.some((part) => part?.type === 'image_url')))) {
+    throw new BridgeError(413, 'body_too_large', 'Request body exceeds 1 MiB.');
+  }
+  return body;
 }
 
 export function createGateway({ key, maxChars, timeoutMs, complete }) {
@@ -90,7 +100,7 @@ export function createGateway({ key, maxChars, timeoutMs, complete }) {
         throw new BridgeError(404, 'not_found', 'Use /v1/chat/completions, /v1/responses, or /v1/messages.');
       }
 
-      const body = await readJSON(request);
+      const body = await readJSON(request, adapter === chatCompletions);
       if (path === '/v1/messages/count_tokens') {
         sendJSON(response, 200, anthropicMessages.count(body));
         return;

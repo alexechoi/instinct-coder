@@ -1,7 +1,10 @@
 import { execFile } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { BridgeError, parseReply } from './protocol.js';
+import { BridgeError, maxImageMiB, parseReply } from './protocol.js';
 
 const exec = promisify(execFile);
 const instinctChat = '+16508702892';
@@ -56,15 +59,36 @@ export function whatsappTransport({ chat = instinctChat, bin, store, pollMs }) {
     signal.throwIfAborted();
     const after = new Date(Date.now() - 30_000).toISOString();
     let recipient = target;
-    const parts = turn.promptParts ?? [turn.prompt];
-    for (const [index, message] of parts.entries()) {
-      if (index) await delay(3_000, undefined, { signal }).catch(() => signal.throwIfAborted());
-      const operation = parts.length === 1 ? 'send the WhatsApp prompt' : `send WhatsApp part ${index + 1} of ${parts.length}`;
-      const sent = await run(['send', 'text', '--to', target, '--no-preview', '--message', message], operation, signal);
+    let hasSent = false;
+    const send = async (kind, args, operation) => {
+      if (hasSent) await delay(3_000, undefined, { signal }).catch(() => signal.throwIfAborted());
+      const sent = await run(['send', kind, '--to', target, ...args], operation, signal);
       if (sent?.sent !== true || typeof sent.id !== 'string') {
         throw new BridgeError(502, 'unconfirmed_send', 'wacli did not confirm the send. Check WhatsApp before retrying.');
       }
       recipient = normalizeDirectChat(sent.to) ?? recipient;
+      hasSent = true;
+    };
+    if (turn.images?.length) {
+      const directory = await mkdtemp(join(tmpdir(), 'instinct-coder-media-'));
+      try {
+        const id = turn.marker.slice('OPENCODE '.length);
+        for (const [index, image] of turn.images.entries()) {
+          const label = `image ${index + 1} of ${turn.images.length}`;
+          const caption = `Instinct Coder request ${id} — ${label}. Keep this image for the following task with the same request ID. Wait for the task message before answering.`;
+          const file = join(directory, `image-${index + 1}.${image.extension}`);
+          await writeFile(file, image.data, { mode: 0o600, flag: 'wx', signal });
+          await send('file', ['--as', 'image', '--file', file, '--mime', image.mime, '--caption', caption,
+            '--max-size-mb', String(maxImageMiB)], `send WhatsApp ${label}`);
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+    const parts = turn.promptParts ?? [turn.prompt];
+    for (const [index, message] of parts.entries()) {
+      const operation = parts.length === 1 ? 'send the WhatsApp prompt' : `send WhatsApp part ${index + 1} of ${parts.length}`;
+      await send('text', ['--no-preview', '--message', message], operation);
     }
     let invalidReply = false;
     try {

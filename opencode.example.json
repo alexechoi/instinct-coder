@@ -15,10 +15,10 @@
       "models": {
         "instinct-whatsapp": {
           "name": "Instinct via WhatsApp",
-          "attachment": false,
+          "attachment": true,
           "tool_call": true,
           "limit": { "context": 10000, "output": 2048 },
-          "modalities": { "input": ["text"], "output": ["text"] }
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
         }
       }
     }

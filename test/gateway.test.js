@@ -13,14 +13,16 @@ const key = 'test-key';
 const headers = { authorization: `Bearer ${key}`, 'content-type': 'application/json' };
 const read = { type: 'function', function: { name: 'read', parameters: { type: 'object' } } };
 const user = (content) => ({ role: 'user', content });
+const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/8ywAAAAASUVORK5CYII=', 'base64');
+const image = (data) => ({ type: 'image_url', image_url: { url: `data:image/png;base64,${data.toString('base64')}` } });
 
-async function testGateway(t, { dispatch, maxChars = 2_000 } = {}) {
+async function testGateway(t, { dispatch, maxChars = 2_000, timeoutMs = 500 } = {}) {
   const store = await mkdtemp(join(tmpdir(), 'instinct-coder-'));
   t.after(() => rm(store, { recursive: true, force: true }));
   const complete = dispatch ?? whatsappTransport({
     bin: fileURLToPath(new URL('./fake-wacli', import.meta.url)), chat: '+15551234567', store, pollMs: 25,
   });
-  const gateway = createGateway({ key, complete, timeoutMs: 500, maxChars });
+  const gateway = createGateway({ key, complete, timeoutMs, maxChars });
   gateway.listen(0, '127.0.0.1');
   await once(gateway, 'listening');
   t.after(() => new Promise((resolve) => gateway.close(resolve)));
@@ -81,6 +83,38 @@ test('rejects oversized, non-text, and unknown-tool responses and reports timeou
   const timedOut = await post({ messages: [user('TIMEOUT_FIXTURE')] });
   assert.equal(timedOut.status, 504);
   assert.equal((await timedOut.json()).error.code, 'reply_timeout');
+});
+
+test('sends inline screenshots as private temporary WhatsApp attachments before the text', async (t) => {
+  const { post } = await testGateway(t, { timeoutMs: 8_000 });
+  const screenshot = Buffer.concat([tinyPng, Buffer.alloc(1024 * 1024)]);
+  const response = await post({ messages: [user([
+    image(screenshot), { type: 'text', text: 'IMAGE_BRIDGE_FIXTURE Inspect the screenshot.' },
+  ])] });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).choices[0].message.content, 'Received the image attachment.');
+});
+
+test('reserves image slots for the current request and rejects excess or invalid current attachments', async (t) => {
+  const { post } = await testGateway(t, { dispatch: (turn) => {
+    const { messages } = JSON.parse(turn.prompt.split('\n').at(-1));
+    assert.match(messages[0].content, /Earlier image omitted/);
+    assert.match(messages[1].content, /\[WhatsApp image 4\]/);
+    assert.equal(turn.images.length, 4);
+    return { content: 'All four images accepted.', finish: 'stop' };
+  } });
+  const fourImages = Array.from({ length: 4 }, () => image(tinyPng));
+  const accepted = await post({ messages: [user([image(tinyPng)]), user(fourImages)] });
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).choices[0].message.content, 'All four images accepted.');
+
+  const excess = await post({ messages: [user([...fourImages, image(tinyPng)])] });
+  assert.equal(excess.status, 400);
+  assert.equal((await excess.json()).error.code, 'image_limit');
+
+  const invalid = await post({ messages: [user([image(Buffer.from('not image data'))])] });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error.code, 'invalid_image');
 });
 
 test('OpenCode fits large instruction files and completed tool history without triggering overflow compaction', async (t) => {
