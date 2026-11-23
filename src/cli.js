@@ -1,8 +1,8 @@
 import { spawn, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createGateway } from './server.js';
@@ -50,6 +50,48 @@ function watchInterrupts(onInterrupt) {
       process.off('SIGTERM', interrupt);
     },
   };
+}
+
+async function update(launcher) {
+  const installed = resolve(launcher);
+  const releases = resolve(root, '..');
+  const target = await realpath(installed).catch((error) => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+  if (basename(installed) !== 'instinct-coder' || basename(releases) !== 'releases' || target !== join(root, 'launch')) {
+    throw new Error('Run the install command from the README to install Instinct Coder before updating.');
+  }
+
+  const staging = await mkdtemp(join(tmpdir(), 'instinct-coder-update-'));
+  const { signal, restore } = watchInterrupts();
+  try {
+    const installer = join(staging, 'install.sh');
+    console.log('Downloading the latest Instinct Coder installer…');
+    try {
+      await exec('curl', ['-fsSL', '--proto', '=https', '--proto-redir', '=https', '--connect-timeout', '10',
+        '--max-time', '30', '--output', installer, 'https://raw.githubusercontent.com/alexechoi/instinct-coder/main/install.sh'], { signal });
+    } catch (error) {
+      signal.throwIfAborted();
+      if (error.code === 'ENOENT') throw new Error('Install curl and run update again.');
+      throw new Error('Could not download the installer. Check your connection and try again.');
+    }
+    signal.throwIfAborted();
+    const child = spawn('sh', [installer], {
+      stdio: 'inherit', signal,
+      env: { ...process.env, INSTINCT_CODER_INSTALL_DIR: dirname(releases),
+        INSTINCT_CODER_BIN_DIR: dirname(installed), INSTINCT_CODER_REF: 'main' },
+    });
+    const result = await outcome(child);
+    signal.throwIfAborted();
+    if (result.error) throw new Error('Could not start the installer.', { cause: result.error });
+    process.exitCode = result.code ?? 1;
+  } finally {
+    try {
+      await rm(staging, { recursive: true, force: true });
+    } finally {
+      restore();
+    }
+  }
 }
 
 async function launchGateway(settings) {
@@ -216,8 +258,10 @@ try {
     await setup(launcher);
   } else if (command === 'repair') {
     await setup(launcher, true);
+  } else if (command === 'update') {
+    await update(launcher);
   } else if (command === '--help' || command === '-h') {
-    console.log(`Usage\n  ${launcher} setup              Link WhatsApp\n  ${launcher} repair             Check and repair the WhatsApp connection\n  ${launcher}                    Open OpenCode in this folder\n  ${launcher} run "your prompt"  Run one OpenCode task\n  ${launcher} codex [args]     Open Codex CLI\n  ${launcher} claude [args]    Open Claude Code (experimental)`);
+    console.log(`Usage\n  ${launcher} setup              Link WhatsApp\n  ${launcher} repair             Check and repair the WhatsApp connection\n  ${launcher} update             Install the latest version\n  ${launcher}                    Open OpenCode in this folder\n  ${launcher} run "your prompt"  Run one OpenCode task\n  ${launcher} codex [args]     Open Codex CLI\n  ${launcher} claude [args]    Open Claude Code (experimental)`);
   } else if (command === 'codex' || command === 'claude') {
     await start(command, args, launcher);
   } else {

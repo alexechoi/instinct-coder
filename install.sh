@@ -116,9 +116,10 @@ main() {
   releases="$install_dir/releases"
   tools="$install_dir/tools/$node_version-$opencode_version-$wacli_version-$platform-$arch"
   launcher="$bin_dir/instinct-coder"
+  updating=no
   if [ -e "$launcher" ] || [ -L "$launcher" ]; then
     case "$(readlink "$launcher" || true)" in
-      "$releases"/*/launch) ;;
+      "$releases"/*/launch) updating=yes ;;
       *) fail "Another installation is present at $launcher." ;;
     esac
   fi
@@ -150,11 +151,17 @@ LAUNCH
   ln -s "$release/launch" "$link_stage/instinct-coder"
   if [ -d "$launcher" ]; then fail "Cannot replace the directory at $launcher."; fi
   mv -f "$link_stage/instinct-coder" "$launcher"
-  printf '\n%s\n' 'Instinct Coder is installed. Link WhatsApp with:'
-  if [ "$launcher" = "$HOME/.local/bin/instinct-coder" ]; then
-    printf '  %s\n' '~/.local/bin/instinct-coder setup'
+  if [ "$updating" = yes ]; then
+    printf '\n%s\n' 'Instinct Coder updated. Launch with:'
+    command_suffix=
   else
-    printf '  "%s" setup\n' "$launcher"
+    printf '\n%s\n' 'Instinct Coder is installed. Link WhatsApp with:'
+    command_suffix=' setup'
+  fi
+  if [ "$launcher" = "$HOME/.local/bin/instinct-coder" ]; then
+    printf '  %s%s\n' '~/.local/bin/instinct-coder' "$command_suffix"
+  else
+    printf '  "%s"%s\n' "$launcher" "$command_suffix"
   fi
 }
 
