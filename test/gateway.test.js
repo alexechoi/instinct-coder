@@ -79,7 +79,9 @@ test('rejects oversized, non-text, and unknown-tool responses and reports timeou
   assert.equal((await post({ messages: [user([{ type: 'image_url', image_url: { url: 'https://example.com' } }])] })).status, 400);
   const unknown = await post({ messages: [user('INVALID_TOOL')], tools: [read] });
   assert.equal(unknown.status, 422);
-  assert.equal((await unknown.json()).error.code, 'invalid_whatsapp_reply');
+  const { error } = await unknown.json();
+  assert.equal(error.code, 'invalid_whatsapp_reply');
+  assert.match(error.message, /tool unavailable.*correction could not be used/);
   const timedOut = await post({ messages: [user('TIMEOUT_FIXTURE')] });
   assert.equal(timedOut.status, 504);
   assert.equal((await timedOut.json()).error.code, 'reply_timeout');
@@ -93,6 +95,35 @@ test('sends inline screenshots as private temporary WhatsApp attachments before 
   ])] });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).choices[0].message.content, 'Received the image attachment.');
+});
+
+test('recovers a malformed screenshot edit reply without uploading the image again for the correction', async (t) => {
+  const { post } = await testGateway(t, { timeoutMs: 8_000 });
+  const edit = { type: 'function', function: { name: 'edit', parameters: { type: 'object' } } };
+  const task = user([image(tinyPng), { type: 'text', text: 'IMAGE_EDIT_FIXTURE Match the design.' }]);
+  const messages = [task];
+  const turn = () => post({ messages, tools: [read, edit] });
+
+  const readResult = await turn();
+  assert.equal(readResult.status, 200);
+  const readMessage = (await readResult.json()).choices[0].message;
+  const [readCall] = readMessage.tool_calls;
+  assert.equal(readCall.function.name, 'read');
+  messages.push(readMessage, { role: 'tool', content: 'Original JSX', tool_call_id: readCall.id });
+
+  const editResult = await turn();
+  assert.equal(editResult.status, 200);
+  const editMessage = (await editResult.json()).choices[0].message;
+  const [editCall] = editMessage.tool_calls;
+  assert.equal(editCall.function.name, 'edit');
+  assert.deepEqual(JSON.parse(editCall.function.arguments), {
+    filePath: '/tmp/app/page.js', newString: '<h1 className="green">\n  Task Garden\n</h1>',
+  });
+  messages.push(editMessage, { role: 'tool', content: 'Edit applied.', tool_call_id: editCall.id });
+
+  const final = await turn();
+  assert.equal(final.status, 200);
+  assert.equal((await final.json()).choices[0].message.content, 'Updated the page from the design.');
 });
 
 test('reserves image slots for the current request and rejects excess or invalid current attachments', async (t) => {

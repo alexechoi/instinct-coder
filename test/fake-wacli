@@ -20,7 +20,8 @@ if (group === 'send' && action === 'file') {
   const contents = readFileSync(path);
   assert.equal(contents.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
   assert.equal(statSync(path).mode & 0o777, 0o600);
-  writeFileSync(uploadRecord, JSON.stringify({ path, bytes: contents.length, caption: option('--caption') }));
+  const uploads = existsSync(uploadRecord) ? JSON.parse(readFileSync(uploadRecord, 'utf8')).uploads + 1 : 1;
+  writeFileSync(uploadRecord, JSON.stringify({ path, bytes: contents.length, caption: option('--caption'), uploads }));
   data = { sent: true, id: 'fake-image', to: jid };
 } else if (group === 'send' && action === 'text') {
   assert.equal(flags[0], '--to');
@@ -28,7 +29,8 @@ if (group === 'send' && action === 'file') {
   assert.ok(flags.includes('--no-preview'));
   const prompt = flags[flags.indexOf('--message') + 1];
   const marker = prompt.match(/^OPENCODE [\da-f-]+$/m)[0];
-  const { messages, tools } = JSON.parse(prompt.split('\n').at(-1));
+  const previous = prompt.startsWith('Correct your reply for ') ? JSON.parse(readFileSync(file, 'utf8')) : null;
+  const { messages, tools } = previous ? { messages: [], tools: [] } : JSON.parse(prompt.split('\n').at(-1));
   const latest = messages.at(-1);
   const transcript = JSON.stringify(messages);
   const startup = join(directory, 'startup-lock');
@@ -38,7 +40,33 @@ if (group === 'send' && action === 'file') {
     process.exit(1);
   }
   let reply = { text: 'Hello through the bridge.' };
-  if (latest.content?.startsWith('SESSION_BRIDGE_FIXTURE ')) {
+  let malformed = false;
+  if (previous) {
+    assert.ok(!previous.corrected);
+    assert.ok(prompt.startsWith(`Correct your reply for ${previous.marker}.`));
+    assert.notEqual(marker, previous.marker);
+    if (previous.malformed) {
+      const upload = JSON.parse(readFileSync(uploadRecord, 'utf8'));
+      assert.equal(upload.uploads, 2);
+      assert.ok(upload.caption.includes(previous.marker.slice('OPENCODE '.length)));
+      assert.ok(!prompt.includes('data:image'));
+    }
+    reply = previous.reply;
+  } else if (transcript.includes('IMAGE_EDIT_FIXTURE')) {
+    assert.ok(transcript.includes('[WhatsApp image 1]'));
+    if (latest.role === 'user') {
+      reply = { tool_calls: [{ name: 'read', arguments: { filePath: '/tmp/app/page.js' } }] };
+    } else if (latest.content === 'Original JSX') {
+      assert.ok(tools.some((tool) => tool.name === 'edit'));
+      malformed = true;
+      reply = { tool_calls: [{ type: 'function', function: {
+        name: 'edit', arguments: JSON.stringify({ filePath: '/tmp/app/page.js', newString: '<h1 className="green">\n  Task Garden\n</h1>' }),
+      } }] };
+    } else {
+      assert.equal(latest.content, 'Edit applied.');
+      reply = { text: 'Updated the page from the design.' };
+    }
+  } else if (latest.content?.startsWith('SESSION_BRIDGE_FIXTURE ')) {
     reply = { text: `Completed the ${latest.content.split(' ').at(-1)} task.` };
   } else if (transcript.includes('IMAGE_BRIDGE_FIXTURE')) {
     const { path, bytes, caption } = JSON.parse(readFileSync(uploadRecord, 'utf8'));
@@ -72,18 +100,19 @@ if (group === 'send' && action === 'file') {
   } else if (transcript.includes('INVALID_TOOL')) {
     reply = { tool_calls: [{ name: 'undeclared', arguments: {} }] };
   }
-  writeFileSync(file, JSON.stringify({ marker, reply, silent: transcript.includes('TIMEOUT_FIXTURE') }));
+  writeFileSync(file, JSON.stringify({ marker, reply, malformed, corrected: Boolean(previous), silent: transcript.includes('TIMEOUT_FIXTURE') }));
   data = { sent: true, id: 'fake-outgoing', to: jid };
 } else {
   assert.equal(group, 'messages');
   assert.equal(action, 'list');
   assert.equal(flags[flags.indexOf('--chat') + 1], jid);
   assert.ok(flags.includes('--from-them'));
-  const { marker, reply, silent } = JSON.parse(readFileSync(file, 'utf8'));
+  const { marker, reply, malformed, silent } = JSON.parse(readFileSync(file, 'utf8'));
+  const payload = malformed ? JSON.stringify(reply).slice(0, -1) : JSON.stringify(reply);
   data = { messages: [
     { FromMe: false, Text: 'OPENCODE 00000000-0000-0000-0000-000000000000\n{"text":"Stale"}' },
     { FromMe: true, Text: `${marker}\n{"text":"Outgoing"}` },
-    ...(silent ? [] : [{ FromMe: false, Text: `${marker}\n\x60\x60\x60json\n${JSON.stringify(reply)}\n\x60\x60\x60` }]),
+    ...(silent ? [] : [{ FromMe: false, Text: `${marker}\n\x60\x60\x60json\n${payload}\n\x60\x60\x60` }]),
   ] };
 }
 console.log(JSON.stringify({ success: true, data, error: null }));
