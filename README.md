@@ -66,7 +66,7 @@ Instinct receives your prompts, shared file contents, and tool results. Use an a
 <summary>Updates and troubleshooting</summary>
 
 - Run the install command again to update. Your WhatsApp link and settings stay in your local state directory.
-- If WhatsApp disconnects, run the setup command to link it again.
+- If WhatsApp stops connecting, run `~/.local/bin/instinct-coder repair` for guided help. Setup also checks live sync before it reports that you're ready.
 - If the bundled OpenCode finds an incompatible session database, Instinct Coder automatically opens a separate one.
 - Contributors can run `npm test` in a checkout.
 </details>

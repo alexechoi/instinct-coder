@@ -76,3 +76,23 @@ test('OpenCode uses a separate database for an incompatible default and keeps us
   assert.match((await cli('run', 'Hello')).stdout, /Hello through the bridge\./);
   assert.equal(await readFile(probeLog, 'utf8'), 'probe\nprobe\n');
 });
+
+test('setup and launch identify sync failures even when local authentication succeeds', async (t) => {
+  const { state, env, cli } = await testLauncher(t);
+  await cli('setup');
+  const settings = await readFile(join(state, 'settings.json'), 'utf8');
+  env.FAKE_WACLI_SYNC_ERROR = 'store is locked (another wacli is running?): store locked (pid=4321\nacquired_at=2026-11-23T00:00:00Z)';
+
+  for (const args of [['setup'], ['run', 'Hello'], ['codex'], ['repair']]) {
+    await assert.rejects(cli(...args), (error) => {
+      assert.match(error.stderr, /Another process is using this WhatsApp connection\. Process ID 4321\./);
+      assert.doesNotMatch(error.stdout, /Ready|sync is working/);
+      if (args[0] !== 'repair') assert.match(error.stderr, /instinct-coder repair/);
+      return true;
+    });
+  }
+
+  env.FAKE_WACLI_SYNC_ERROR = 'dial unix /example/.send.sock: bind: invalid argument';
+  await assert.rejects(cli('setup'), /local send socket could not start/);
+  assert.equal(await readFile(join(state, 'settings.json'), 'utf8'), settings);
+});
