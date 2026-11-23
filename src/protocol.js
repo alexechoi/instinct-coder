@@ -12,6 +12,18 @@ export class BridgeError extends Error {
   }
 }
 
+function openCodeLimitError(prompt, messages, tools, maxChars, multipart) {
+  const instructions = messages.filter(({ role }) => role === 'system' || role === 'developer');
+  const setupChars = JSON.stringify(instructions).length + JSON.stringify(tools).length - 4;
+  const total = prompt.length.toLocaleString('en-US');
+  const setup = setupChars.toLocaleString('en-US');
+  const budget = multipart ? `two ${maxChars.toLocaleString('en-US')}-character WhatsApp messages` : `one ${maxChars.toLocaleString('en-US')}-character WhatsApp message`;
+  const hint = setupChars > prompt.length / 2
+    ? 'Reduce OpenCode’s project instructions or disable unused skills and MCP tools.'
+    : 'Compact the session or reduce the amount of text attached to the task.';
+  return new BridgeError(400, 'whatsapp_context_limit', `OpenCode sent ${total} characters before trimming, including ${setup} in instructions and tool definitions. The request still exceeds the budget of ${budget}. ${hint}`);
+}
+
 function invalid(message) {
   throw new BridgeError(400, 'invalid_request', message);
 }
@@ -24,7 +36,7 @@ function textContent(content) {
   return content.map((part) => part.text).join('\n');
 }
 
-export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = false } = {}) {
+export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = true } = {}) {
   if (!record(body) || body.model !== model) invalid(`Use the model ${model}.`);
   if (!Array.isArray(body.messages) || body.messages.length === 0) invalid('Provide at least one message.');
   if (body.n !== undefined && body.n !== 1) invalid('The bridge supports one completion per request.');
@@ -84,14 +96,18 @@ export function prepareTurn(body, maxChars, { fitOpenCode = false, multipart = f
   const turn = { marker, prompt, tools: new Set(tools.map((tool) => tool.name)), requireTool, parallel: body.parallel_tool_calls !== false };
   if (fits(prompt)) return turn;
   if (fitOpenCode) {
-    if (multipart) {
-      const promptParts = splitOpenCodePrompt(replyInstructions, context, marker, maxChars, fits);
-      if (promptParts) return { ...turn, promptParts };
-    }
-    const fitted = fitOpenCodePrompt(messages, tools, maxChars, render, fits);
+    const pack = (context, note) => {
+      const prompt = render(context, note);
+      if (fits(prompt)) return { prompt };
+      if (!multipart) return;
+      const instructions = note ? `${replyInstructions}\n${note}` : replyInstructions;
+      const promptParts = splitOpenCodePrompt(instructions, context, marker, maxChars, fits);
+      if (promptParts) return { prompt, promptParts };
+    };
+    const fitted = pack(context) ?? fitOpenCodePrompt(messages, tools, maxChars, pack);
     if (fitted) return { ...turn, ...fitted };
     // OpenCode automatically compacts on HTTP 413 and retries with the same system instructions and tools.
-    throw new BridgeError(400, 'whatsapp_context_limit', 'The request could not fit in the WhatsApp message budget. Shorten the current request or compact the OpenCode session manually.');
+    throw openCodeLimitError(prompt, messages, tools, maxChars, multipart);
   }
   if (prompt.length > maxChars) {
     throw new BridgeError(413, 'prompt_too_large', `WhatsApp prompt has ${prompt.length} characters. The configured limit is ${maxChars}. Start a shorter session or reduce tool output.`);

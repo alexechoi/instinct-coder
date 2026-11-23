@@ -3,6 +3,7 @@ import { BridgeError, model, prepareTurn } from './protocol.js';
 
 export const identifier = (prefix) => `${prefix}_${randomUUID().replaceAll('-', '')}`;
 export const timestamp = () => Math.floor(Date.now() / 1000);
+const isOpenCode = (headers) => headers['x-instinct-coder-client'] === 'opencode';
 
 export function invalid(message) {
   throw new BridgeError(400, 'invalid_request', message);
@@ -53,8 +54,8 @@ export function sse(response, value, event) {
 export const chatCompletions = {
   prepareTurn(body, maxChars, headers) {
     return prepareTurn(body, maxChars, {
-      fitOpenCode: headers['x-instinct-coder-client'] === 'opencode',
-      multipart: headers['x-instinct-coder-multipart'] === '1',
+      fitOpenCode: isOpenCode(headers),
+      multipart: headers['x-instinct-coder-multipart'] !== '0',
     });
   },
   open(response, body) {
@@ -80,7 +81,15 @@ export const chatCompletions = {
     };
     return { complete };
   },
-  error(response, failure) {
+  error(response, failure, headers) {
+    if (failure.code === 'body_too_large' && isOpenCode(headers)) {
+      // OpenCode treats HTTP 413 as a signal to re-send the request after compacting.
+      return sendJSON(response, 400, { error: {
+        message: 'OpenCode sent more than 1 MiB before WhatsApp formatting. Compact the session or reduce project instructions and tool output.',
+        type: failure.code,
+        code: failure.code,
+      } });
+    }
     const value = { error: { message: failure.message, type: failure.code, code: failure.code } };
     if (!response.headersSent) return sendJSON(response, failure.status, value);
     sse(response, value);

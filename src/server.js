@@ -109,7 +109,7 @@ export function createGateway({ key, maxChars, timeoutMs, complete }) {
         ? new BridgeError(504, 'reply_timeout', 'The request expired while queued or waiting for a matching WhatsApp text reply. Check the chat and wacli sync.')
         : new BridgeError(500, 'bridge_error', 'The bridge could not complete the request.');
       if (exchange?.fail) exchange.fail(failure);
-      else wire.error(response, failure);
+      else wire.error(response, failure, request.headers);
     } finally {
       clearInterval(heartbeat);
     }
