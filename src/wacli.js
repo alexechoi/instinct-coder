@@ -55,11 +55,17 @@ export function whatsappTransport({ chat = instinctChat, bin, store, pollMs }) {
   return async (turn, signal) => {
     signal.throwIfAborted();
     const after = new Date(Date.now() - 30_000).toISOString();
-    const sent = await run(['send', 'text', '--to', target, '--no-preview', '--message', turn.prompt], 'send the WhatsApp prompt', signal);
-    if (sent?.sent !== true || typeof sent.id !== 'string') {
-      throw new BridgeError(502, 'unconfirmed_send', 'wacli did not confirm the send. Check WhatsApp before retrying.');
+    let recipient = target;
+    const parts = turn.promptParts ?? [turn.prompt];
+    for (const [index, message] of parts.entries()) {
+      if (index) await delay(3_000, undefined, { signal }).catch(() => signal.throwIfAborted());
+      const operation = parts.length === 1 ? 'send the WhatsApp prompt' : `send WhatsApp part ${index + 1} of ${parts.length}`;
+      const sent = await run(['send', 'text', '--to', target, '--no-preview', '--message', message], operation, signal);
+      if (sent?.sent !== true || typeof sent.id !== 'string') {
+        throw new BridgeError(502, 'unconfirmed_send', 'wacli did not confirm the send. Check WhatsApp before retrying.');
+      }
+      recipient = normalizeDirectChat(sent.to) ?? recipient;
     }
-    const recipient = normalizeDirectChat(sent.to) ?? target;
     let invalidReply = false;
     try {
       while (true) {

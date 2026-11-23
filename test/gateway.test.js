@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createGateway } from '../src/server.js';
+import { parseReply } from '../src/protocol.js';
 import { whatsappTransport } from '../src/wacli.js';
 
 const key = 'test-key';
@@ -13,13 +14,13 @@ const headers = { authorization: `Bearer ${key}`, 'content-type': 'application/j
 const read = { type: 'function', function: { name: 'read', parameters: { type: 'object' } } };
 const user = (content) => ({ role: 'user', content });
 
-async function testGateway(t) {
+async function testGateway(t, { dispatch, maxChars = 2_000 } = {}) {
   const store = await mkdtemp(join(tmpdir(), 'instinct-coder-'));
   t.after(() => rm(store, { recursive: true, force: true }));
-  const complete = whatsappTransport({
+  const complete = dispatch ?? whatsappTransport({
     bin: fileURLToPath(new URL('./fake-wacli', import.meta.url)), chat: '+15551234567', store, pollMs: 25,
   });
-  const gateway = createGateway({ key, complete, timeoutMs: 500, maxChars: 2_000 });
+  const gateway = createGateway({ key, complete, timeoutMs: 500, maxChars });
   gateway.listen(0, '127.0.0.1');
   await once(gateway, 'listening');
   t.after(() => new Promise((resolve) => gateway.close(resolve)));
@@ -80,6 +81,82 @@ test('rejects oversized, non-text, and unknown-tool responses and reports timeou
   const timedOut = await post({ messages: [user('TIMEOUT_FIXTURE')] });
   assert.equal(timedOut.status, 504);
   assert.equal((await timedOut.json()).error.code, 'reply_timeout');
+});
+
+test('OpenCode fits large instruction files and completed tool history without triggering overflow compaction', async (t) => {
+  const auth = { ...headers, 'x-instinct-coder-client': 'opencode' };
+  const task = user('Build a matching card game.');
+  const filePath = '/project with spaces/AGENTS.md';
+  const original = 'Start of guide\n' + 'Project instruction\n'.repeat(3_000) + 'End of guide\n';
+  const output = 'First log line\n' + 'Tool output\n'.repeat(5_000) + 'Last log line';
+  const dispatch = (turn) => {
+    assert.ok(turn.prompt.length <= 40_000);
+    assert.equal(turn.promptParts, undefined);
+    const conversation = JSON.parse(turn.prompt.split('\n').at(-1));
+    assert.deepEqual(conversation.tools, [read.function]);
+    const [system, request, previousCall, result] = conversation.messages;
+    assert.match(system.content, /^Keep the existing system instructions\./);
+    assert.ok(system.content.includes(`Instructions from: ${filePath}`));
+    assert.ok(system.content.includes('Start of guide') && system.content.includes('End of guide'));
+    assert.match(system.content, /<mcp_instructions>\nKeep these instructions\.\n<\/mcp_instructions>$/);
+    assert.deepEqual(request, task);
+    const [call] = previousCall.tool_calls;
+    assert.equal(call.id, result.tool_call_id);
+    const args = JSON.parse(call.function.arguments);
+    assert.equal(args.filePath, '/project with spaces/index.html');
+    assert.match(args.content, /excerpt shortened by Instinct Coder/);
+    assert.match(result.content, /^First log line\n[\s\S]+Last log line$/);
+    assert.match(result.content, /excerpt shortened by Instinct Coder/);
+    return parseReply(turn, `${turn.marker}\n${JSON.stringify({ tool_calls: [{ name: 'read', arguments: { filePath, offset: 100, limit: 500 } }] })}`);
+  };
+  const { request } = await testGateway(t, { maxChars: 40_000, dispatch });
+  const response = await request('chat/completions', { tools: [read], messages: [
+    { role: 'system', content: `Keep the existing system instructions.\n\nInstructions from: ${filePath}\n${original}\n<mcp_instructions>\nKeep these instructions.\n</mcp_instructions>` },
+    task,
+    { role: 'assistant', tool_calls: [{ id: 'call_write', type: 'function', function: {
+      name: 'write', arguments: JSON.stringify({ filePath: '/project with spaces/index.html', content: 'code '.repeat(10_000) }),
+    } }] },
+    { role: 'tool', tool_call_id: 'call_write', content: output },
+  ] }, auth);
+  assert.equal(response.status, 200);
+  const [call] = (await response.json()).choices[0].message.tool_calls;
+  assert.deepEqual(JSON.parse(call.function.arguments), { filePath, offset: 100, limit: 48 });
+
+  const tooLarge = await request('chat/completions', { messages: [user('User content '.repeat(8_000))] }, auth);
+  assert.equal(tooLarge.status, 400);
+  assert.equal((await tooLarge.json()).error.code, 'whatsapp_context_limit');
+});
+
+test('OpenCode multipart leaves normal requests alone and bounds oversized UTF-8 requests to two messages', async (t) => {
+  const auth = { ...headers, 'x-instinct-coder-client': 'opencode', 'x-instinct-coder-multipart': '1' };
+  const short = user('Hello');
+  const oversized = user('前'.repeat(40_000) + '🎴'.repeat(8_000) + ' end of request');
+  const dispatch = (turn) => {
+    if (turn.promptParts) {
+      const [first, final] = turn.promptParts;
+      assert.equal(turn.promptParts.length, 2);
+      assert.ok(!first.includes(turn.marker));
+      assert.ok(final.includes(turn.marker));
+      const chunks = [first, final].map((part) => {
+        assert.ok(part.length <= 40_000 && Buffer.byteLength(part) <= 120_000);
+        assert.equal(part, part.toWellFormed());
+        return part.split('<context-part>\n')[1].split('\n</context-part>')[0];
+      });
+      assert.deepEqual(JSON.parse(chunks.join('')), { tools: [], messages: [oversized] });
+    } else {
+      assert.deepEqual(JSON.parse(turn.prompt.split('\n').at(-1)).messages, [short]);
+    }
+    return parseReply(turn, `${turn.marker}\n{"text":"Received."}`);
+  };
+  const { request } = await testGateway(t, { maxChars: 40_000, dispatch });
+  for (const message of [short, oversized]) {
+    const response = await request('chat/completions', { messages: [message] }, auth);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).choices[0].message.content, 'Received.');
+  }
+  const tooLarge = await request('chat/completions', { messages: [user('前'.repeat(81_000))] }, auth);
+  assert.equal(tooLarge.status, 400);
+  assert.equal((await tooLarge.json()).error.code, 'whatsapp_context_limit');
 });
 
 

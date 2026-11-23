@@ -51,7 +51,12 @@ export function sse(response, value, event) {
 }
 
 export const chatCompletions = {
-  prepareTurn,
+  prepareTurn(body, maxChars, headers) {
+    return prepareTurn(body, maxChars, {
+      fitOpenCode: headers['x-instinct-coder-client'] === 'opencode',
+      multipart: headers['x-instinct-coder-multipart'] === '1',
+    });
+  },
   open(response, body) {
     const metadata = { id: identifier('chatcmpl'), model, created: timestamp() };
     if (body.stream !== true) {

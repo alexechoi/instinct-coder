@@ -19,14 +19,14 @@ Open a terminal on Linux or macOS 15 or later and have your phone handy.
 curl -fsSL https://raw.githubusercontent.com/alexechoi/instinct-coder/main/install.sh | sh
 ```
 
-This installs Instinct Coder, OpenCode, and the WhatsApp connector for your user account.
+This installs Instinct Coder, OpenCode, and the WhatsApp connector. The interactive installer adds a shortcut for zsh and Bash. Open a new terminal to use it. The full command works in any shell at `~/.local/bin/instinct-coder`.
 
 **2. Link WhatsApp**
 
 We recommend linking a dedicated WhatsApp account and keeping your primary account separate. Before pairing, confirm the dedicated account can exchange messages with **@textinstinct**.
 
 ```sh
-~/.local/bin/instinct-coder setup
+instinct-coder setup
 ```
 
 On the phone signed in to that account, open **WhatsApp → Linked devices → Link a device**, then scan the QR code in your terminal.
@@ -38,7 +38,7 @@ On the phone signed in to that account, open **WhatsApp → Linked devices → L
 From your project folder, launch OpenCode with Instinct selected.
 
 ```sh
-~/.local/bin/instinct-coder
+instinct-coder
 ```
 
 The launcher starts the WhatsApp bridge. OpenCode asks before edits or shell commands. Quit OpenCode to stop the bridge.
@@ -48,8 +48,8 @@ The launcher starts the WhatsApp bridge. OpenCode asks before edits or shell com
 Install the client you want to use, then run one of these commands from your project folder.
 
 ```sh
-~/.local/bin/instinct-coder codex
-~/.local/bin/instinct-coder claude
+instinct-coder codex
+instinct-coder claude
 ```
 
 Both use the same linked WhatsApp account for text and local tool calls. Claude Code support is experimental. For oversized project instruction reminders, Claude can read the linked files in sections. Short sessions work best.
@@ -65,8 +65,10 @@ Instinct receives your prompts, shared file contents, and tool results. Use an a
 <details>
 <summary>Updates and troubleshooting</summary>
 
-- Run `~/.local/bin/instinct-coder update` to update. Your WhatsApp link and settings carry over. If your version predates `update`, rerun the install command once.
-- If WhatsApp stops connecting, run `~/.local/bin/instinct-coder repair` for guided help. Setup also checks live sync before it reports that you're ready.
+- Run `instinct-coder update` to update. Your WhatsApp link and settings carry over. If your version predates `update`, rerun the install command once.
+- If WhatsApp stops connecting, run `instinct-coder repair` for guided help. Setup also checks live sync before it reports that you're ready.
 - If the bundled OpenCode finds an incompatible session database, Instinct Coder automatically opens a separate one.
+- If an OpenCode request is too large for WhatsApp, the bridge shortens tool history and points OpenCode to large instruction files it can read in sections. If the request still exceeds the limit, shorten it or try OpenCode’s `/compact` command.
+- To try sending the full context first, run `INSTINCT_CODER_MULTIPART=1 instinct-coder`. Oversized requests can use up to two WhatsApp messages of 40,000 characters each, including the extra instructions. Larger requests use the single-message recovery above.
 - Contributors can run `npm test` in a checkout.
 </details>
