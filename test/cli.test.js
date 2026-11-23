@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -10,9 +13,20 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 const path = (relative) => fileURLToPath(new URL(relative, import.meta.url));
 
+async function waitUntil(check) {
+  const limit = Date.now() + 4000;
+  while (!check()) {
+    assert.ok(Date.now() < limit, 'Timed out waiting for the shared bridge state.');
+    await delay(30);
+  }
+}
+
 async function testLauncher(t) {
   const state = await mkdtemp(join(tmpdir(), 'instinct-setup-'));
-  t.after(() => rm(state, { recursive: true, force: true }));
+  t.after(async () => {
+    await waitUntil(() => !existsSync(join(state, 'whatsapp', 'sync.fixture-lock')));
+    await rm(state, { recursive: true, force: true });
+  });
   const env = {
     ...process.env,
     INSTINCT_CODER_STATE_DIR: state,
@@ -26,7 +40,7 @@ async function testLauncher(t) {
   return { state, env, cli };
 }
 
-test('setup links WhatsApp once, and launch runs the gateway until OpenCode exits', async (t) => {
+test('setup links WhatsApp once, and the shared bridge stops after OpenCode exits', async (t) => {
   const { state, env, cli } = await testLauncher(t);
   await assert.rejects(cli('run', 'Hello'), /Finish setup first/);
   const first = await cli('setup');
@@ -48,7 +62,58 @@ test('setup links WhatsApp once, and launch runs the gateway until OpenCode exit
   assert.equal(await readFile(settings, 'utf8'), initial);
 
   const syncPid = Number(await readFile(join(state, 'whatsapp', 'sync.pid'), 'utf8'));
-  assert.throws(() => process.kill(syncPid, 0), { code: 'ESRCH' });
+  await waitUntil(() => {
+    try {
+      process.kill(syncPid, 0);
+      return false;
+    } catch (error) {
+      assert.equal(error.code, 'ESRCH');
+      return true;
+    }
+  });
+});
+
+test('simultaneous launches share one bridge and the second survives when the first exits', async (t) => {
+  const { state, env, cli } = await testLauncher(t);
+  await cli('setup');
+  const socket = join(state, '.bridge.sock');
+  const abandoned = spawn(process.execPath, ['-e',
+    'require("node:net").createServer().listen(process.argv[1], () => console.log("ready"))', socket],
+  { stdio: ['ignore', 'pipe', 'inherit'] });
+  const abandonedExit = once(abandoned, 'exit');
+  await once(abandoned.stdout, 'data');
+  abandoned.kill('SIGKILL');
+  await abandonedExit;
+  assert.ok((await stat(socket)).isSocket());
+
+  env.FAKE_WACLI_SYNC_DELAY = '300';
+  env.FAKE_OPENCODE_SESSIONS_LOG = join(state, 'sessions.jsonl');
+  env.FAKE_OPENCODE_SECOND_READY = join(state, 'second-ready');
+  const first = cli('run', 'SESSION_BRIDGE_FIXTURE first');
+  const second = cli('run', 'SESSION_BRIDGE_FIXTURE second');
+  // Observe both promises even if the first assertion fails.
+  const settled = Promise.allSettled([first, second]);
+  try {
+    const results = await first;
+    assert.match(results.stdout, /Completed the first task\./);
+    await waitUntil(() => readSessions().length === 2);
+    assert.equal(new Set(readSessions().map(({ baseURL }) => baseURL)).size, 1);
+    const starts = (await readFile(join(state, 'whatsapp', 'sync-starts'), 'utf8')).trim().split('\n');
+    assert.equal(starts.length, 2); // Setup and one shared launch.
+    assert.equal(process.kill(Number(starts[1]), 0), true);
+    assert.match((await cli('repair')).stdout, /WhatsApp sync is working/);
+  } finally {
+    await writeFile(env.FAKE_OPENCODE_SECOND_READY, 'ready');
+    await settled;
+  }
+  assert.match((await second).stdout, /Completed the second task\./);
+  await waitUntil(() => !existsSync(join(state, 'whatsapp', 'sync.fixture-lock')));
+  assert.ok(!existsSync(socket));
+
+  function readSessions() {
+    // Each fixture writes one complete line to this local file.
+    return readFileSync(env.FAKE_OPENCODE_SESSIONS_LOG, 'utf8').trim().split('\n').map(JSON.parse);
+  }
 });
 
 test('OpenCode uses a separate database for an incompatible default and keeps using it', async (t) => {
@@ -81,11 +146,12 @@ test('setup and launch identify sync failures even when local authentication suc
   const { state, env, cli } = await testLauncher(t);
   await cli('setup');
   const settings = await readFile(join(state, 'settings.json'), 'utf8');
-  env.FAKE_WACLI_SYNC_ERROR = 'store is locked (another wacli is running?): store locked (pid=4321\nacquired_at=2026-11-23T00:00:00Z)';
+  const pid = (await readFile(join(state, 'whatsapp', 'sync.pid'), 'utf8')).trim();
+  env.FAKE_WACLI_SYNC_ERROR = `store is locked (another wacli is running?): store locked (pid=${pid}\nacquired_at=2026-11-23T00:00:00Z)`;
 
   for (const args of [['setup'], ['run', 'Hello'], ['codex'], ['repair']]) {
     await assert.rejects(cli(...args), (error) => {
-      assert.match(error.stderr, /Another process is using this WhatsApp connection\. Process ID 4321\./);
+      assert.ok(error.stderr.includes(`Another process is using this WhatsApp connection. Process ID ${pid}.`));
       assert.doesNotMatch(error.stdout, /Ready|sync is working/);
       if (args[0] !== 'repair') assert.match(error.stderr, /instinct-coder repair/);
       return true;

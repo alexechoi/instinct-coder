@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
@@ -16,21 +17,32 @@ if (args.includes('auth') && args.includes('status')) {
   writeFileSync(token, 'linked', { flag: 'wx' });
   console.log('Test QR');
 } else if (args.includes('sync')) {
-  console.error(JSON.stringify({ event: 'connected' }));
   const errorFile = join(store, 'sync-error');
   const error = process.env.FAKE_WACLI_SYNC_ERROR || (existsSync(errorFile) ? readFileSync(errorFile, 'utf8') : '');
   if (error) {
     console.error(JSON.stringify({ event: 'error', data: { message: error } }));
     process.exit(1);
   }
+  const lock = join(store, 'sync.fixture-lock');
+  try {
+    writeFileSync(lock, String(process.pid), { flag: 'wx' });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    const pid = readFileSync(lock, 'utf8');
+    console.error(JSON.stringify({ event: 'error', data: { message: `store is locked (another wacli is running?): pid=${pid}` } }));
+    process.exit(1);
+  }
   writeFileSync(join(store, 'sync.pid'), String(process.pid));
+  appendFileSync(join(store, 'sync-starts'), `${process.pid}\n`);
   const socket = join(store, '.send.sock');
   const server = createServer((connection) => connection.destroy());
-  server.listen(socket);
   process.on('SIGTERM', () => server.close(() => {
     rmSync(socket, { force: true });
+    rmSync(lock, { force: true });
     process.exit(0);
   }));
+  if (process.env.FAKE_WACLI_SYNC_DELAY) await delay(Number(process.env.FAKE_WACLI_SYNC_DELAY));
+  server.listen(socket, () => console.error(JSON.stringify({ event: 'connected' })));
 } else {
   const fixture = fileURLToPath(new URL('./fake-wacli', import.meta.url));
   const result = spawnSync(fixture, args, { stdio: 'inherit' });

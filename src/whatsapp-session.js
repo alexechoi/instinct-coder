@@ -186,7 +186,7 @@ async function ask(question, signal) {
   }
 }
 
-async function repair(session, issue, signal) {
+export async function repairWhatsApp(session, issue, signal) {
   console.log(`\nWhatsApp repair\n${issue.message}`);
   let lockWait;
   if (issue.kind === 'link') {
@@ -227,7 +227,7 @@ export async function openWhatsApp(session, { signal, setup = false } = {}) {
   } catch (error) {
     signal?.throwIfAborted();
     if (error instanceof WhatsAppIssue && process.stdin.isTTY && process.stdout.isTTY) {
-      return repair(session, error, signal);
+      return repairWhatsApp(session, error, signal);
     }
     throw error;
   }

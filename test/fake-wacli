@@ -38,7 +38,9 @@ if (group === 'send' && action === 'file') {
     process.exit(1);
   }
   let reply = { text: 'Hello through the bridge.' };
-  if (transcript.includes('IMAGE_BRIDGE_FIXTURE')) {
+  if (latest.content?.startsWith('SESSION_BRIDGE_FIXTURE ')) {
+    reply = { text: `Completed the ${latest.content.split(' ').at(-1)} task.` };
+  } else if (transcript.includes('IMAGE_BRIDGE_FIXTURE')) {
     const { path, bytes, caption } = JSON.parse(readFileSync(uploadRecord, 'utf8'));
     assert.ok(bytes > 1024 * 1024);
     assert.ok(!existsSync(path));

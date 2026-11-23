@@ -5,11 +5,10 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { createGateway } from './server.js';
 import { model } from './protocol.js';
+import { connectBridge, launchGateway, openBridge } from './shared-bridge.js';
 import { configureShellShortcut } from './shortcut.js';
-import { whatsappTransport } from './wacli.js';
-import { openWhatsApp, outcome, WhatsAppIssue } from './whatsapp-session.js';
+import { openWhatsApp, outcome, repairWhatsApp, WhatsAppIssue } from './whatsapp-session.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const state = resolve(process.env.INSTINCT_CODER_STATE_DIR || join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'instinct-coder'));
@@ -95,39 +94,35 @@ async function update(launcher) {
   }
 }
 
-async function launchGateway(settings) {
-  const complete = whatsappTransport({ bin: wacli, store, pollMs: 1500 });
-  const server = createGateway({ key: settings.key, maxChars: 40_000, timeoutMs: 180_000, complete });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  return { server, baseURL: `http://127.0.0.1:${server.address().port}/v1` };
-}
-
 async function setup(launcher, repairing = false) {
   const { signal, restore } = watchInterrupts();
   try {
     const previous = await readSettings();
     await mkdir(store, { recursive: true, mode: 0o700 });
     console.log('Checking WhatsApp sync…');
-    const sync = await openWhatsApp(whatsapp, { signal, setup: !repairing });
-    await sync.stop();
-    signal.throwIfAborted();
-    console.log('WhatsApp sync is working.');
-
     const settings = { key: previous?.key || randomBytes(32).toString('hex') };
-    const { server, baseURL } = await launchGateway(settings);
+    const shared = previous && await connectBridge(state, signal);
+    let gateway;
     try {
-      const response = await fetch(`${baseURL}/models`, {
+      if (shared) {
+        if (!repairing) console.log('WhatsApp is already linked.');
+      } else {
+        const sync = await openWhatsApp(whatsapp, { signal, setup: !repairing });
+        await sync.stop();
+        signal.throwIfAborted();
+        gateway = await launchGateway({ ...settings, whatsapp });
+      }
+      console.log('WhatsApp sync is working.');
+      const response = await fetch(`${(shared ?? gateway).baseURL}/models`, {
         headers: { Authorization: `Bearer ${settings.key}` },
         signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
       });
       const result = await response.json();
       if (!response.ok || result.data?.[0]?.id !== model) throw new Error('The local gateway did not respond as expected.');
     } finally {
-      server.closeAllConnections();
-      server.close();
+      shared?.release();
+      gateway?.server.closeAllConnections();
+      gateway?.server.close();
     }
 
     const staging = `${settingsPath}.${randomBytes(8).toString('hex')}.tmp`;
@@ -221,23 +216,28 @@ async function start(client, args, launcher) {
 
   console.log('Connecting to WhatsApp…');
   let child;
-  let server;
-  let sync;
+  let gateway;
   const { signal, restore } = watchInterrupts((signal) => child?.kill(signal));
 
   try {
-    sync = await openWhatsApp(whatsapp, { signal });
-    const gateway = await launchGateway(settings);
-    server = gateway.server;
+    const options = { ...settings, state, bin: wacli, signal };
+    try {
+      gateway = await openBridge(options);
+    } catch (error) {
+      if (!(error instanceof WhatsAppIssue) || !process.stdin.isTTY || !process.stdout.isTTY) throw error;
+      const sync = await repairWhatsApp(whatsapp, error, signal);
+      await sync.stop();
+      gateway = await openBridge(options);
+    }
     signal.throwIfAborted();
     const command = await clientCommand(client, args, gateway.baseURL, settings.key);
     signal.throwIfAborted();
     child = spawn(command.bin, command.args, { stdio: 'inherit', env: command.env });
     const result = await Promise.race([
       outcome(child),
-      sync.ended.then((failure) => {
+      gateway.closed.then(() => {
         signal.throwIfAborted();
-        throw failure;
+        throw new Error(`The shared WhatsApp bridge stopped. Run ${launcher} repair if it happens again.`);
       }),
     ]);
     if (result.error) throw new Error(`Could not start ${client}. Check that it is installed.`, { cause: result.error });
@@ -245,9 +245,7 @@ async function start(client, args, launcher) {
   } finally {
     try {
       child?.kill('SIGTERM');
-      server?.closeAllConnections();
-      server?.close();
-      await sync?.stop();
+      gateway?.release();
     } finally {
       restore();
     }
