@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createGateway } from './server.js';
 import { model } from './protocol.js';
+import { configureShellShortcut } from './shortcut.js';
 import { whatsappTransport } from './wacli.js';
 import { openWhatsApp, outcome, WhatsAppIssue } from './whatsapp-session.js';
 
@@ -136,6 +137,7 @@ async function setup(launcher, repairing = false) {
     } finally {
       await rm(staging, { force: true });
     }
+    if (!repairing) await configureShellShortcut(launcher);
     console.log(`Ready. Open a project folder and run:\n  ${launcher}`);
   } finally {
     restore();

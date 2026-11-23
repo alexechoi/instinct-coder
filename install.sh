@@ -151,6 +151,9 @@ LAUNCH
   ln -s "$release/launch" "$link_stage/instinct-coder"
   if [ -d "$launcher" ]; then fail "Cannot replace the directory at $launcher."; fi
   mv -f "$link_stage/instinct-coder" "$launcher"
+  if [ -t 1 ] && [ -f "$release/src/shortcut.js" ]; then
+    "$tools/node" "$release/src/shortcut.js" "$launcher" || printf '%s\n' 'Use the installed path below if the shortcut is unavailable.'
+  fi
   if [ "$updating" = yes ]; then
     printf '\n%s\n' 'Instinct Coder updated. Launch with:'
     command_suffix=
