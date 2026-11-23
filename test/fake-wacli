@@ -1,16 +1,28 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const [json, storeFlag, directory, group, action, ...flags] = process.argv.slice(2);
 assert.equal(json, '--json');
 assert.equal(storeFlag, '--store');
 const file = join(directory, 'round-trip.json');
+const uploadRecord = join(directory, 'image-upload.json');
 const chat = process.env.FAKE_WACLI_CHAT || '+15551234567';
 const jid = `${chat.slice(1)}@s.whatsapp.net`;
 let data;
-if (group === 'send' && action === 'text') {
+if (group === 'send' && action === 'file') {
+  const option = (name) => flags[flags.indexOf(name) + 1];
+  assert.equal(option('--to'), chat);
+  assert.equal(option('--as'), 'image');
+  assert.equal(option('--mime'), 'image/png');
+  const path = option('--file');
+  const contents = readFileSync(path);
+  assert.equal(contents.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  writeFileSync(uploadRecord, JSON.stringify({ path, bytes: contents.length, caption: option('--caption') }));
+  data = { sent: true, id: 'fake-image', to: jid };
+} else if (group === 'send' && action === 'text') {
   assert.equal(flags[0], '--to');
   assert.equal(flags[1], chat);
   assert.ok(flags.includes('--no-preview'));
@@ -26,7 +38,15 @@ if (group === 'send' && action === 'text') {
     process.exit(1);
   }
   let reply = { text: 'Hello through the bridge.' };
-  if (latest.role === 'user' && transcript.includes('READ_BRIDGE_FIXTURE') && tools.some((tool) => tool.name === 'read')) {
+  if (transcript.includes('IMAGE_BRIDGE_FIXTURE')) {
+    const { path, bytes, caption } = JSON.parse(readFileSync(uploadRecord, 'utf8'));
+    assert.ok(bytes > 1024 * 1024);
+    assert.ok(!existsSync(path));
+    assert.ok(caption.includes(`${marker.slice('OPENCODE '.length)} — image 1 of 1`));
+    assert.ok(latest.content.includes('[WhatsApp image 1]'));
+    assert.ok(!prompt.includes('data:image'));
+    reply = { text: 'Received the image attachment.' };
+  } else if (latest.role === 'user' && transcript.includes('READ_BRIDGE_FIXTURE') && tools.some((tool) => tool.name === 'read')) {
     const path = transcript.match(/\/[^\s"\\]+\/bridge-fixture\.txt/)?.[0];
     assert.ok(path);
     reply = { tool_calls: [{ name: 'read', arguments: { filePath: path } }] };

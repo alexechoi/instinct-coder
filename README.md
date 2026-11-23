@@ -43,6 +43,8 @@ instinct-coder
 
 The launcher starts the WhatsApp bridge. OpenCode asks before edits or shell commands. Quit OpenCode to stop the bridge.
 
+Paste or attach a PNG or JPEG screenshot in OpenCode to show Instinct what you’re working on. Images are sent as WhatsApp attachments. You can attach up to four images, each up to 8 MiB and up to 15 MiB total.
+
 ### Codex CLI and Claude Code
 
 Install the client you want to use, then run one of these commands from your project folder.
@@ -60,7 +62,7 @@ The [bill splitter](examples/bill-splitter/index.html) was built in a live OpenC
 
 Instinct Coder is provided as is, without warranties. To the extent permitted by applicable law, its contributors disclaim liability for losses, damages, and account restrictions arising from its use. [Apache 2.0 license](LICENSE)
 
-Instinct receives your prompts, shared file contents, and tool results. Use an account authorized for automation and share files you have permission to send. [Instinct terms](https://instinct.com/terms) · [WhatsApp terms](https://www.whatsapp.com/legal/terms-of-service)
+Instinct receives your prompts, attached images, shared file contents, and tool results. Use an account authorized for automation and share files you have permission to send. [Instinct terms](https://instinct.com/terms) · [WhatsApp terms](https://www.whatsapp.com/legal/terms-of-service)
 
 <details>
 <summary>Updates and troubleshooting</summary>

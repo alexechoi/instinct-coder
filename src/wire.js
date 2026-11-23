@@ -56,6 +56,7 @@ export const chatCompletions = {
     return prepareTurn(body, maxChars, {
       fitOpenCode: isOpenCode(headers),
       multipart: headers['x-instinct-coder-multipart'] !== '0',
+      allowImages: true,
     });
   },
   open(response, body) {
